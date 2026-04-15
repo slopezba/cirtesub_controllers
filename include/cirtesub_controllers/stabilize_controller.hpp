@@ -99,6 +99,9 @@ private:
   double kd_yaw_{0.0};
 
   bool allow_roll_pitch_{false};
+  double feedforward_gain_x_{1.0};
+  double feedforward_gain_y_{1.0};
+  double feedforward_gain_z_{1.0};
   double yaw_command_threshold_{1e-3};
   double roll_setpoint_{0.0};
   double pitch_setpoint_{0.0};
