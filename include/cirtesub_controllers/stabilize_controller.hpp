@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "sura_msgs/msg/navigator.hpp"
 
 namespace cirtesub_controllers
@@ -41,6 +43,7 @@ private:
   using TwistMsg = geometry_msgs::msg::Twist;
   using Vector3Msg = geometry_msgs::msg::Vector3;
   using NavigatorMsg = sura_msgs::msg::Navigator;
+  using TriggerSrv = std_srvs::srv::Trigger;
 
   struct AxisPidState
   {
@@ -60,20 +63,24 @@ private:
     AxisPidState & state);
 
   static double wrapAngle(double angle);
+  void publishSetpoint();
 
   rclcpp::Subscription<TwistMsg>::SharedPtr feedforward_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
+  rclcpp::Service<TriggerSrv>::SharedPtr enable_roll_pitch_srv_;
   rclcpp::Publisher<Vector3Msg>::SharedPtr setpoint_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<Vector3Msg>> setpoint_rt_pub_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> feedforward_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
+  realtime_tools::RealtimeBuffer<bool> allow_roll_pitch_buffer_;
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
   std::string feedforward_topic_;
   std::string navigator_topic_;
   std::string setpoint_topic_;
+  std::string enable_roll_pitch_service_name_;
   std::string body_force_controller_name_;
 
   double kp_roll_{0.0};
@@ -88,6 +95,7 @@ private:
   double ki_yaw_{0.0};
   double kd_yaw_{0.0};
 
+  bool allow_roll_pitch_{false};
   double yaw_command_threshold_{1e-3};
   double roll_setpoint_{0.0};
   double pitch_setpoint_{0.0};
@@ -98,6 +106,7 @@ private:
   bool roll_feedforward_active_{false};
   bool pitch_feedforward_active_{false};
   bool yaw_feedforward_active_{false};
+  std::atomic<bool> zero_roll_pitch_requested_{false};
 
   AxisPidState roll_pid_;
   AxisPidState pitch_pid_;

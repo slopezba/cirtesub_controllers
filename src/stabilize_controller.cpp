@@ -23,8 +23,11 @@ controller_interface::CallbackReturn StabilizeController::on_init()
     auto_declare<std::string>(
       "setpoint_topic", "stabilize_controller/set_point");
     auto_declare<std::string>(
+      "enable_roll_pitch_service_name", "stabilize_controller/enable_roll_pitch");
+    auto_declare<std::string>(
       "body_force_controller_name", "body_force_controller");
 
+    auto_declare<bool>("allow_roll_pitch", false);
     auto_declare<double>("kp_roll", 0.0);
     auto_declare<double>("ki_roll", 0.0);
     auto_declare<double>("kd_roll", 0.0);
@@ -77,8 +80,11 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
   feedforward_topic_ = get_node()->get_parameter("feedforward_topic").as_string();
   navigator_topic_ = get_node()->get_parameter("navigator_topic").as_string();
   setpoint_topic_ = get_node()->get_parameter("setpoint_topic").as_string();
+  enable_roll_pitch_service_name_ =
+    get_node()->get_parameter("enable_roll_pitch_service_name").as_string();
   body_force_controller_name_ =
     get_node()->get_parameter("body_force_controller_name").as_string();
+  allow_roll_pitch_ = get_node()->get_parameter("allow_roll_pitch").as_bool();
 
   kp_roll_ = get_node()->get_parameter("kp_roll").as_double();
   ki_roll_ = get_node()->get_parameter("ki_roll").as_double();
@@ -111,11 +117,25 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
       navigator_buffer_.writeFromNonRT(msg);
     });
 
+  enable_roll_pitch_srv_ = get_node()->create_service<TriggerSrv>(
+    enable_roll_pitch_service_name_,
+    [this](
+      const std::shared_ptr<TriggerSrv::Request>,
+      std::shared_ptr<TriggerSrv::Response> response)
+    {
+      allow_roll_pitch_ = true;
+      allow_roll_pitch_buffer_.writeFromNonRT(true);
+      zero_roll_pitch_requested_.store(true);
+      response->success = true;
+      response->message = "Roll and pitch setpoints will be zeroed and unlocked in update.";
+    });
+
   setpoint_pub_ = get_node()->create_publisher<Vector3Msg>(
     setpoint_topic_,
     rclcpp::SystemDefaultsQoS());
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<Vector3Msg>>(setpoint_pub_);
+  allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&StabilizeController::parametersCallback, this, std::placeholders::_1));
@@ -138,6 +158,8 @@ controller_interface::CallbackReturn StabilizeController::on_activate(
   roll_feedforward_active_ = false;
   pitch_feedforward_active_ = false;
   yaw_feedforward_active_ = false;
+  zero_roll_pitch_requested_.store(false);
+  allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
   first_update_ = true;
 
   for (auto & command_interface : command_interfaces_) {
@@ -162,6 +184,8 @@ controller_interface::CallbackReturn StabilizeController::on_deactivate(
   roll_feedforward_active_ = false;
   pitch_feedforward_active_ = false;
   yaw_feedforward_active_ = false;
+  zero_roll_pitch_requested_.store(false);
+  allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
   first_update_ = true;
 
   for (auto & command_interface : command_interfaces_) {
@@ -183,6 +207,12 @@ rcl_interfaces::msg::SetParametersResult StabilizeController::parametersCallback
 
     if (name == "kp_roll") {
       kp_roll_ = param.as_double();
+    } else if (name == "allow_roll_pitch") {
+      allow_roll_pitch_ = param.as_bool();
+      allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
+      if (!allow_roll_pitch_) {
+        zero_roll_pitch_requested_.store(true);
+      }
     } else if (name == "ki_roll") {
       ki_roll_ = param.as_double();
       roll_pid_.integral = 0.0;
@@ -235,6 +265,16 @@ double StabilizeController::wrapAngle(double angle)
   return std::atan2(std::sin(angle), std::cos(angle));
 }
 
+void StabilizeController::publishSetpoint()
+{
+  if (setpoint_rt_pub_ && setpoint_rt_pub_->trylock()) {
+    setpoint_rt_pub_->msg_.x = roll_setpoint_;
+    setpoint_rt_pub_->msg_.y = pitch_setpoint_;
+    setpoint_rt_pub_->msg_.z = yaw_setpoint_;
+    setpoint_rt_pub_->unlockAndPublish();
+  }
+}
+
 controller_interface::return_type StabilizeController::update(
   const rclcpp::Time &,
   const rclcpp::Duration & period)
@@ -281,26 +321,38 @@ controller_interface::return_type StabilizeController::update(
   const double torque_ff_x = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.x : 0.0;
   const double torque_ff_y = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.y : 0.0;
   const double yaw_feedforward = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.z : 0.0;
+  const bool * allow_roll_pitch_ptr = allow_roll_pitch_buffer_.readFromRT();
+  const bool allow_roll_pitch = allow_roll_pitch_ptr ? *allow_roll_pitch_ptr : false;
+  const bool zero_roll_pitch_requested =
+    zero_roll_pitch_requested_.exchange(false);
   const bool has_roll_feedforward = std::abs(torque_ff_x) > yaw_command_threshold_;
   const bool has_pitch_feedforward = std::abs(torque_ff_y) > yaw_command_threshold_;
   const bool has_yaw_feedforward = std::abs(yaw_feedforward) > yaw_command_threshold_;
-  const bool publish_setpoint =
+  bool publish_setpoint =
+    zero_roll_pitch_requested ||
     (!has_roll_feedforward && roll_feedforward_active_) ||
     (!has_pitch_feedforward && pitch_feedforward_active_) ||
     (!has_yaw_feedforward && yaw_feedforward_active_);
 
-  if (has_roll_feedforward) {
+  if (zero_roll_pitch_requested || !allow_roll_pitch) {
+    roll_setpoint_ = 0.0;
+    pitch_setpoint_ = 0.0;
+    roll_pid_.integral = 0.0;
+    pitch_pid_.integral = 0.0;
+  }
+
+  if (allow_roll_pitch && !zero_roll_pitch_requested && has_roll_feedforward) {
     roll_setpoint_ = roll;
     roll_pid_.integral = 0.0;
-  } else if (roll_feedforward_active_) {
+  } else if (allow_roll_pitch && !zero_roll_pitch_requested && roll_feedforward_active_) {
     roll_setpoint_ = roll;
     roll_pid_.integral = 0.0;
   }
 
-  if (has_pitch_feedforward) {
+  if (allow_roll_pitch && !zero_roll_pitch_requested && has_pitch_feedforward) {
     pitch_setpoint_ = pitch;
     pitch_pid_.integral = 0.0;
-  } else if (pitch_feedforward_active_) {
+  } else if (allow_roll_pitch && !zero_roll_pitch_requested && pitch_feedforward_active_) {
     pitch_setpoint_ = pitch;
     pitch_pid_.integral = 0.0;
   }
@@ -314,12 +366,7 @@ controller_interface::return_type StabilizeController::update(
   }
 
   if (publish_setpoint) {
-    if (setpoint_rt_pub_ && setpoint_rt_pub_->trylock()) {
-      setpoint_rt_pub_->msg_.x = roll_setpoint_;
-      setpoint_rt_pub_->msg_.y = pitch_setpoint_;
-      setpoint_rt_pub_->msg_.z = yaw_setpoint_;
-      setpoint_rt_pub_->unlockAndPublish();
-    }
+    publishSetpoint();
   }
 
   const double dt = period.seconds();
@@ -347,8 +394,8 @@ controller_interface::return_type StabilizeController::update(
   command_interfaces_[4].set_value(torque_y);
   command_interfaces_[5].set_value(torque_z);
 
-  roll_feedforward_active_ = has_roll_feedforward;
-  pitch_feedforward_active_ = has_pitch_feedforward;
+  roll_feedforward_active_ = allow_roll_pitch && has_roll_feedforward;
+  pitch_feedforward_active_ = allow_roll_pitch && has_pitch_feedforward;
   yaw_feedforward_active_ = has_yaw_feedforward;
   first_update_ = false;
 

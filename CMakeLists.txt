@@ -13,6 +13,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(urdf REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -44,6 +45,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
   realtime_tools
   std_msgs
+  std_srvs
   geometry_msgs
   urdf
   sura_msgs
@@ -82,6 +84,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   realtime_tools
   std_msgs
+  std_srvs
   geometry_msgs
   urdf
   tf2
