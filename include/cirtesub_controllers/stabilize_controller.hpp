@@ -102,6 +102,9 @@ private:
   double feedforward_gain_x_{1.0};
   double feedforward_gain_y_{1.0};
   double feedforward_gain_z_{1.0};
+  double feedforward_gain_roll_{1.0};
+  double feedforward_gain_pitch_{1.0};
+  double feedforward_gain_yaw_{1.0};
   double yaw_command_threshold_{1e-3};
   double roll_setpoint_{0.0};
   double pitch_setpoint_{0.0};

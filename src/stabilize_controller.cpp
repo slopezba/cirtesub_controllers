@@ -33,6 +33,9 @@ controller_interface::CallbackReturn StabilizeController::on_init()
     auto_declare<double>("feedforward_gain_x", 1.0);
     auto_declare<double>("feedforward_gain_y", 1.0);
     auto_declare<double>("feedforward_gain_z", 1.0);
+    auto_declare<double>("feedforward_gain_roll", 1.0);
+    auto_declare<double>("feedforward_gain_pitch", 1.0);
+    auto_declare<double>("feedforward_gain_yaw", 1.0);
     auto_declare<double>("kp_roll", 0.0);
     auto_declare<double>("ki_roll", 0.0);
     auto_declare<double>("kd_roll", 0.0);
@@ -95,6 +98,9 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
   feedforward_gain_x_ = get_node()->get_parameter("feedforward_gain_x").as_double();
   feedforward_gain_y_ = get_node()->get_parameter("feedforward_gain_y").as_double();
   feedforward_gain_z_ = get_node()->get_parameter("feedforward_gain_z").as_double();
+  feedforward_gain_roll_ = get_node()->get_parameter("feedforward_gain_roll").as_double();
+  feedforward_gain_pitch_ = get_node()->get_parameter("feedforward_gain_pitch").as_double();
+  feedforward_gain_yaw_ = get_node()->get_parameter("feedforward_gain_yaw").as_double();
 
   kp_roll_ = get_node()->get_parameter("kp_roll").as_double();
   ki_roll_ = get_node()->get_parameter("ki_roll").as_double();
@@ -158,10 +164,13 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Stabilize feedforward gains loaded: x=%.3f y=%.3f z=%.3f",
+    "Stabilize feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
     feedforward_gain_x_,
     feedforward_gain_y_,
-    feedforward_gain_z_);
+    feedforward_gain_z_,
+    feedforward_gain_roll_,
+    feedforward_gain_pitch_,
+    feedforward_gain_yaw_);
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&StabilizeController::parametersCallback, this, std::placeholders::_1));
@@ -194,10 +203,13 @@ controller_interface::CallbackReturn StabilizeController::on_activate(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Stabilize controller activated with feedforward gains: x=%.3f y=%.3f z=%.3f",
+    "Stabilize controller activated with feedforward gains: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
     feedforward_gain_x_,
     feedforward_gain_y_,
-    feedforward_gain_z_);
+    feedforward_gain_z_,
+    feedforward_gain_roll_,
+    feedforward_gain_pitch_,
+    feedforward_gain_yaw_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -252,6 +264,15 @@ rcl_interfaces::msg::SetParametersResult StabilizeController::parametersCallback
     } else if (name == "feedforward_gain_z") {
       feedforward_gain_z_ = param.as_double();
       feedforward_gains_updated = true;
+    } else if (name == "feedforward_gain_roll") {
+      feedforward_gain_roll_ = param.as_double();
+      feedforward_gains_updated = true;
+    } else if (name == "feedforward_gain_pitch") {
+      feedforward_gain_pitch_ = param.as_double();
+      feedforward_gains_updated = true;
+    } else if (name == "feedforward_gain_yaw") {
+      feedforward_gain_yaw_ = param.as_double();
+      feedforward_gains_updated = true;
     } else if (name == "ki_roll") {
       ki_roll_ = param.as_double();
       roll_pid_.integral = 0.0;
@@ -279,10 +300,13 @@ rcl_interfaces::msg::SetParametersResult StabilizeController::parametersCallback
   if (feedforward_gains_updated) {
     RCLCPP_INFO(
       get_node()->get_logger(),
-      "Stabilize feedforward gains updated: x=%.3f y=%.3f z=%.3f",
+      "Stabilize feedforward gains updated: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
       feedforward_gain_x_,
       feedforward_gain_y_,
-      feedforward_gain_z_);
+      feedforward_gain_z_,
+      feedforward_gain_roll_,
+      feedforward_gain_pitch_,
+      feedforward_gain_yaw_);
   }
 
   return result;
@@ -378,9 +402,15 @@ controller_interface::return_type StabilizeController::update(
     (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->linear.y * feedforward_gain_y_ : 0.0;
   const double force_z =
     (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->linear.z * feedforward_gain_z_ : 0.0;
-  const double torque_ff_x = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.x : 0.0;
-  const double torque_ff_y = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.y : 0.0;
-  const double yaw_feedforward = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.z : 0.0;
+  const double torque_ff_x =
+    (feedforward_msg && *feedforward_msg) ?
+    (*feedforward_msg)->angular.x * feedforward_gain_roll_ : 0.0;
+  const double torque_ff_y =
+    (feedforward_msg && *feedforward_msg) ?
+    (*feedforward_msg)->angular.y * feedforward_gain_pitch_ : 0.0;
+  const double yaw_feedforward =
+    (feedforward_msg && *feedforward_msg) ?
+    (*feedforward_msg)->angular.z * feedforward_gain_yaw_ : 0.0;
   const bool * allow_roll_pitch_ptr = allow_roll_pitch_buffer_.readFromRT();
   const bool allow_roll_pitch = allow_roll_pitch_ptr ? *allow_roll_pitch_ptr : false;
   const bool zero_roll_pitch_requested =
