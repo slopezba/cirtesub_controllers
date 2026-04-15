@@ -171,6 +171,18 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
     feedforward_gain_roll_,
     feedforward_gain_pitch_,
     feedforward_gain_yaw_);
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "Stabilize PID gains loaded: roll(kp=%.3f ki=%.3f kd=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f)",
+    kp_roll_,
+    ki_roll_,
+    kd_roll_,
+    kp_pitch_,
+    ki_pitch_,
+    kd_pitch_,
+    kp_yaw_,
+    ki_yaw_,
+    kd_yaw_);
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&StabilizeController::parametersCallback, this, std::placeholders::_1));
