@@ -501,6 +501,19 @@ controller_interface::return_type StabilizeController::update(
     yaw_feedforward +
     computePid(yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, yaw_pid_);
 
+  const double roll_integral_contribution = ki_roll_ * roll_pid_.integral;
+  const double pitch_integral_contribution = ki_pitch_ * pitch_pid_.integral;
+  const double yaw_integral_contribution = ki_yaw_ * yaw_pid_.integral;
+
+  RCLCPP_INFO_THROTTLE(
+    get_node()->get_logger(),
+    *get_node()->get_clock(),
+    1000,
+    "Integral contribution: roll=%.3f pitch=%.3f yaw=%.3f",
+    roll_integral_contribution,
+    pitch_integral_contribution,
+    yaw_integral_contribution);
+
   command_interfaces_[0].set_value(force_x);
   command_interfaces_[1].set_value(force_y);
   command_interfaces_[2].set_value(force_z);
