@@ -129,8 +129,14 @@ controller_interface::CallbackReturn StabilizeController::on_activate(
   roll_pid_ = AxisPidState{};
   pitch_pid_ = AxisPidState{};
   yaw_pid_ = AxisPidState{};
+  roll_setpoint_ = 0.0;
+  pitch_setpoint_ = 0.0;
   yaw_setpoint_ = 0.0;
+  roll_setpoint_initialized_ = false;
+  pitch_setpoint_initialized_ = false;
   yaw_setpoint_initialized_ = false;
+  roll_feedforward_active_ = false;
+  pitch_feedforward_active_ = false;
   yaw_feedforward_active_ = false;
   first_update_ = true;
 
@@ -147,8 +153,14 @@ controller_interface::CallbackReturn StabilizeController::on_deactivate(
   roll_pid_ = AxisPidState{};
   pitch_pid_ = AxisPidState{};
   yaw_pid_ = AxisPidState{};
+  roll_setpoint_ = 0.0;
+  pitch_setpoint_ = 0.0;
   yaw_setpoint_ = 0.0;
+  roll_setpoint_initialized_ = false;
+  pitch_setpoint_initialized_ = false;
   yaw_setpoint_initialized_ = false;
+  roll_feedforward_active_ = false;
+  pitch_feedforward_active_ = false;
   yaw_feedforward_active_ = false;
   first_update_ = true;
 
@@ -250,8 +262,16 @@ controller_interface::return_type StabilizeController::update(
   double yaw = 0.0;
   tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
 
-  if (!yaw_setpoint_initialized_) {
+  if (
+    !roll_setpoint_initialized_ ||
+    !pitch_setpoint_initialized_ ||
+    !yaw_setpoint_initialized_)
+  {
+    roll_setpoint_ = roll;
+    pitch_setpoint_ = pitch;
     yaw_setpoint_ = yaw;
+    roll_setpoint_initialized_ = true;
+    pitch_setpoint_initialized_ = true;
     yaw_setpoint_initialized_ = true;
   }
 
@@ -261,7 +281,29 @@ controller_interface::return_type StabilizeController::update(
   const double torque_ff_x = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.x : 0.0;
   const double torque_ff_y = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.y : 0.0;
   const double yaw_feedforward = (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->angular.z : 0.0;
+  const bool has_roll_feedforward = std::abs(torque_ff_x) > yaw_command_threshold_;
+  const bool has_pitch_feedforward = std::abs(torque_ff_y) > yaw_command_threshold_;
   const bool has_yaw_feedforward = std::abs(yaw_feedforward) > yaw_command_threshold_;
+  const bool publish_setpoint =
+    (!has_roll_feedforward && roll_feedforward_active_) ||
+    (!has_pitch_feedforward && pitch_feedforward_active_) ||
+    (!has_yaw_feedforward && yaw_feedforward_active_);
+
+  if (has_roll_feedforward) {
+    roll_setpoint_ = roll;
+    roll_pid_.integral = 0.0;
+  } else if (roll_feedforward_active_) {
+    roll_setpoint_ = roll;
+    roll_pid_.integral = 0.0;
+  }
+
+  if (has_pitch_feedforward) {
+    pitch_setpoint_ = pitch;
+    pitch_pid_.integral = 0.0;
+  } else if (pitch_feedforward_active_) {
+    pitch_setpoint_ = pitch;
+    pitch_pid_.integral = 0.0;
+  }
 
   if (has_yaw_feedforward) {
     yaw_setpoint_ = yaw;
@@ -269,10 +311,12 @@ controller_interface::return_type StabilizeController::update(
   } else if (yaw_feedforward_active_) {
     yaw_setpoint_ = yaw;
     yaw_pid_.integral = 0.0;
+  }
 
+  if (publish_setpoint) {
     if (setpoint_rt_pub_ && setpoint_rt_pub_->trylock()) {
-      setpoint_rt_pub_->msg_.x = 0.0;
-      setpoint_rt_pub_->msg_.y = 0.0;
+      setpoint_rt_pub_->msg_.x = roll_setpoint_;
+      setpoint_rt_pub_->msg_.y = pitch_setpoint_;
       setpoint_rt_pub_->msg_.z = yaw_setpoint_;
       setpoint_rt_pub_->unlockAndPublish();
     }
@@ -280,8 +324,8 @@ controller_interface::return_type StabilizeController::update(
 
   const double dt = period.seconds();
 
-  const double roll_error = wrapAngle(0.0 - roll);
-  const double pitch_error = wrapAngle(0.0 - pitch);
+  const double roll_error = wrapAngle(roll_setpoint_ - roll);
+  const double pitch_error = wrapAngle(pitch_setpoint_ - pitch);
   const double yaw_error = wrapAngle(yaw_setpoint_ - yaw);
 
   const double torque_x =
@@ -303,6 +347,8 @@ controller_interface::return_type StabilizeController::update(
   command_interfaces_[4].set_value(torque_y);
   command_interfaces_[5].set_value(torque_z);
 
+  roll_feedforward_active_ = has_roll_feedforward;
+  pitch_feedforward_active_ = has_pitch_feedforward;
   yaw_feedforward_active_ = has_yaw_feedforward;
   first_update_ = false;
 

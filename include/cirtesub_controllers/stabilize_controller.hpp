@@ -89,8 +89,14 @@ private:
   double kd_yaw_{0.0};
 
   double yaw_command_threshold_{1e-3};
+  double roll_setpoint_{0.0};
+  double pitch_setpoint_{0.0};
   double yaw_setpoint_{0.0};
+  bool roll_setpoint_initialized_{false};
+  bool pitch_setpoint_initialized_{false};
   bool yaw_setpoint_initialized_{false};
+  bool roll_feedforward_active_{false};
+  bool pitch_feedforward_active_{false};
   bool yaw_feedforward_active_{false};
 
   AxisPidState roll_pid_;
