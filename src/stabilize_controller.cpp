@@ -25,6 +25,8 @@ controller_interface::CallbackReturn StabilizeController::on_init()
     auto_declare<std::string>(
       "enable_roll_pitch_service_name", "stabilize_controller/enable_roll_pitch");
     auto_declare<std::string>(
+      "disable_roll_pitch_service_name", "stabilize_controller/disable_roll_pitch");
+    auto_declare<std::string>(
       "body_force_controller_name", "body_force_controller");
 
     auto_declare<bool>("allow_roll_pitch", false);
@@ -82,6 +84,8 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
   setpoint_topic_ = get_node()->get_parameter("setpoint_topic").as_string();
   enable_roll_pitch_service_name_ =
     get_node()->get_parameter("enable_roll_pitch_service_name").as_string();
+  disable_roll_pitch_service_name_ =
+    get_node()->get_parameter("disable_roll_pitch_service_name").as_string();
   body_force_controller_name_ =
     get_node()->get_parameter("body_force_controller_name").as_string();
   allow_roll_pitch_ = get_node()->get_parameter("allow_roll_pitch").as_bool();
@@ -123,11 +127,20 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
       const std::shared_ptr<TriggerSrv::Request>,
       std::shared_ptr<TriggerSrv::Response> response)
     {
-      allow_roll_pitch_ = true;
-      allow_roll_pitch_buffer_.writeFromNonRT(true);
-      zero_roll_pitch_requested_.store(true);
+      setRollPitchEnabled(true, true);
       response->success = true;
       response->message = "Roll and pitch setpoints will be zeroed and unlocked in update.";
+    });
+
+  disable_roll_pitch_srv_ = get_node()->create_service<TriggerSrv>(
+    disable_roll_pitch_service_name_,
+    [this](
+      const std::shared_ptr<TriggerSrv::Request>,
+      std::shared_ptr<TriggerSrv::Response> response)
+    {
+      setRollPitchEnabled(false, true);
+      response->success = true;
+      response->message = "Roll and pitch setpoints will be zeroed and locked in update.";
     });
 
   setpoint_pub_ = get_node()->create_publisher<Vector3Msg>(
@@ -208,11 +221,7 @@ rcl_interfaces::msg::SetParametersResult StabilizeController::parametersCallback
     if (name == "kp_roll") {
       kp_roll_ = param.as_double();
     } else if (name == "allow_roll_pitch") {
-      allow_roll_pitch_ = param.as_bool();
-      allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
-      if (!allow_roll_pitch_) {
-        zero_roll_pitch_requested_.store(true);
-      }
+      setRollPitchEnabled(param.as_bool(), !param.as_bool());
     } else if (name == "ki_roll") {
       ki_roll_ = param.as_double();
       roll_pid_.integral = 0.0;
@@ -263,6 +272,15 @@ double StabilizeController::computePid(
 double StabilizeController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
+}
+
+void StabilizeController::setRollPitchEnabled(bool enabled, bool request_zero_setpoint)
+{
+  allow_roll_pitch_ = enabled;
+  allow_roll_pitch_buffer_.writeFromNonRT(enabled);
+  if (request_zero_setpoint) {
+    zero_roll_pitch_requested_.store(true);
+  }
 }
 
 void StabilizeController::publishSetpoint()

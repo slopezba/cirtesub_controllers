@@ -64,10 +64,12 @@ private:
 
   static double wrapAngle(double angle);
   void publishSetpoint();
+  void setRollPitchEnabled(bool enabled, bool request_zero_setpoint);
 
   rclcpp::Subscription<TwistMsg>::SharedPtr feedforward_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
   rclcpp::Service<TriggerSrv>::SharedPtr enable_roll_pitch_srv_;
+  rclcpp::Service<TriggerSrv>::SharedPtr disable_roll_pitch_srv_;
   rclcpp::Publisher<Vector3Msg>::SharedPtr setpoint_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<Vector3Msg>> setpoint_rt_pub_;
 
@@ -81,6 +83,7 @@ private:
   std::string navigator_topic_;
   std::string setpoint_topic_;
   std::string enable_roll_pitch_service_name_;
+  std::string disable_roll_pitch_service_name_;
   std::string body_force_controller_name_;
 
   double kp_roll_{0.0};
