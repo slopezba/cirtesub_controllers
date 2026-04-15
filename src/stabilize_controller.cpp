@@ -21,7 +21,7 @@ controller_interface::CallbackReturn StabilizeController::on_init()
     auto_declare<std::string>(
       "navigator_topic", "/cirtesub/navigator/navigation");
     auto_declare<std::string>(
-      "setpoint_topic", "stabilize/set_point");
+      "setpoint_topic", "stabilize_controller/set_point");
     auto_declare<std::string>(
       "body_force_controller_name", "body_force_controller");
 

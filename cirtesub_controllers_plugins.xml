@@ -12,4 +12,11 @@
     base_class_type="controller_interface::ControllerInterface">
     <description>Body velocity controller</description>
   </class>
+
+  <class
+    name="cirtesub_controllers/StabilizeController"
+    type="cirtesub_controllers::StabilizeController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Attitude stabilization controller with yaw hold</description>
+  </class>
 </library>
