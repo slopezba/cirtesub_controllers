@@ -19,4 +19,11 @@
     base_class_type="controller_interface::ControllerInterface">
     <description>Attitude stabilization controller with yaw hold</description>
   </class>
+
+  <class
+    name="cirtesub_controllers/DepthHoldController"
+    type="cirtesub_controllers::DepthHoldController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>Attitude stabilization controller with yaw and depth hold</description>
+  </class>
 </library>

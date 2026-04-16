@@ -24,6 +24,7 @@ find_package(tf2 REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/body_force_controller.cpp
   src/body_velocity_controller.cpp
+  src/depth_hold_controller.cpp
   src/stabilize_controller.cpp
 )
 
