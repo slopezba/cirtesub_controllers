@@ -9,7 +9,7 @@
   <class
     name="cirtesub_controllers/BodyVelocityController"
     type="cirtesub_controllers::BodyVelocityController"
-    base_class_type="controller_interface::ControllerInterface">
+    base_class_type="controller_interface::ChainableControllerInterface">
     <description>Body velocity controller</description>
   </class>
 

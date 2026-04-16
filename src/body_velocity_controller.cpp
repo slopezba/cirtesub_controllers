@@ -1,5 +1,8 @@
 #include "cirtesub_controllers/body_velocity_controller.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -123,6 +126,19 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
       navigator_buffer_.writeFromNonRT(msg);
     });
 
+  reference_interface_names_ = {
+    "linear.x",
+    "linear.y",
+    "linear.z",
+    "angular.x",
+    "angular.y",
+    "angular.z"
+  };
+
+  reference_interfaces_.resize(
+    reference_interface_names_.size(),
+    std::numeric_limits<double>::quiet_NaN());
+
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&BodyVelocityController::parametersCallback, this, std::placeholders::_1));
 
@@ -148,6 +164,11 @@ controller_interface::CallbackReturn BodyVelocityController::on_activate(
   pitch_pid_ = AxisPidState{};
   yaw_pid_ = AxisPidState{};
 
+  std::fill(
+    reference_interfaces_.begin(),
+    reference_interfaces_.end(),
+    std::numeric_limits<double>::quiet_NaN());
+
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
   }
@@ -166,6 +187,11 @@ controller_interface::CallbackReturn BodyVelocityController::on_deactivate(
   roll_pid_ = AxisPidState{};
   pitch_pid_ = AxisPidState{};
   yaw_pid_ = AxisPidState{};
+
+  std::fill(
+    reference_interfaces_.begin(),
+    reference_interfaces_.end(),
+    std::numeric_limits<double>::quiet_NaN());
 
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
@@ -274,11 +300,60 @@ void BodyVelocityController::logGains(const std::string & context) const
     kd_yaw_);
 }
 
-controller_interface::return_type BodyVelocityController::update(
+std::vector<hardware_interface::CommandInterface>
+BodyVelocityController::on_export_reference_interfaces()
+{
+  std::vector<hardware_interface::CommandInterface> exported_reference_interfaces;
+  exported_reference_interfaces.reserve(reference_interface_names_.size());
+
+  for (size_t i = 0; i < reference_interface_names_.size(); ++i) {
+    exported_reference_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        get_node()->get_name(),
+        reference_interface_names_[i],
+        &reference_interfaces_[i]));
+  }
+
+  return exported_reference_interfaces;
+}
+
+bool BodyVelocityController::on_set_chained_mode(bool chained_mode)
+{
+  if (chained_mode) {
+    RCLCPP_INFO(get_node()->get_logger(), "BodyVelocityController switched to chained mode");
+  } else {
+    RCLCPP_INFO(get_node()->get_logger(), "BodyVelocityController switched to topic mode");
+    std::fill(
+      reference_interfaces_.begin(),
+      reference_interfaces_.end(),
+      std::numeric_limits<double>::quiet_NaN());
+  }
+
+  return true;
+}
+
+controller_interface::return_type BodyVelocityController::update_reference_from_subscribers()
+{
+  auto setpoint_msg = setpoint_buffer_.readFromRT();
+
+  if (!setpoint_msg || !(*setpoint_msg)) {
+    return controller_interface::return_type::OK;
+  }
+
+  reference_interfaces_[0] = (*setpoint_msg)->linear.x;
+  reference_interfaces_[1] = (*setpoint_msg)->linear.y;
+  reference_interfaces_[2] = (*setpoint_msg)->linear.z;
+  reference_interfaces_[3] = (*setpoint_msg)->angular.x;
+  reference_interfaces_[4] = (*setpoint_msg)->angular.y;
+  reference_interfaces_[5] = (*setpoint_msg)->angular.z;
+
+  return controller_interface::return_type::OK;
+}
+
+controller_interface::return_type BodyVelocityController::update_and_write_commands(
   const rclcpp::Time &,
   const rclcpp::Duration & period)
 {
-  auto setpoint_msg = setpoint_buffer_.readFromRT();
   auto navigator_msg = navigator_buffer_.readFromRT();
 
   if (!navigator_msg || !(*navigator_msg)) {
@@ -295,15 +370,23 @@ controller_interface::return_type BodyVelocityController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  TwistMsg desired_velocity;
-  if (setpoint_msg && *setpoint_msg) {
-    desired_velocity = *(*setpoint_msg);
-  }
-
   const double dt = period.seconds();
 
+  const double setpoint_linear_x =
+    std::isnan(reference_interfaces_[0]) ? 0.0 : reference_interfaces_[0];
+  const double setpoint_linear_y =
+    std::isnan(reference_interfaces_[1]) ? 0.0 : reference_interfaces_[1];
+  const double setpoint_linear_z =
+    std::isnan(reference_interfaces_[2]) ? 0.0 : reference_interfaces_[2];
+  const double setpoint_angular_x =
+    std::isnan(reference_interfaces_[3]) ? 0.0 : reference_interfaces_[3];
+  const double setpoint_angular_y =
+    std::isnan(reference_interfaces_[4]) ? 0.0 : reference_interfaces_[4];
+  const double setpoint_angular_z =
+    std::isnan(reference_interfaces_[5]) ? 0.0 : reference_interfaces_[5];
+
   const double force_x = computePid(
-    desired_velocity.linear.x - (*navigator_msg)->body_velocity.linear.x,
+    setpoint_linear_x - (*navigator_msg)->body_velocity.linear.x,
     (*navigator_msg)->body_acceleration.linear.x,
     dt,
     kp_x_,
@@ -312,7 +395,7 @@ controller_interface::return_type BodyVelocityController::update(
     x_pid_);
 
   const double force_y = computePid(
-    desired_velocity.linear.y - (*navigator_msg)->body_velocity.linear.y,
+    setpoint_linear_y - (*navigator_msg)->body_velocity.linear.y,
     (*navigator_msg)->body_acceleration.linear.y,
     dt,
     kp_y_,
@@ -321,7 +404,7 @@ controller_interface::return_type BodyVelocityController::update(
     y_pid_);
 
   const double force_z = computePid(
-    desired_velocity.linear.z - (*navigator_msg)->body_velocity.linear.z,
+    setpoint_linear_z - (*navigator_msg)->body_velocity.linear.z,
     (*navigator_msg)->body_acceleration.linear.z,
     dt,
     kp_z_,
@@ -330,7 +413,7 @@ controller_interface::return_type BodyVelocityController::update(
     z_pid_);
 
   const double torque_x = computePid(
-    desired_velocity.angular.x - (*navigator_msg)->body_velocity.angular.x,
+    setpoint_angular_x - (*navigator_msg)->body_velocity.angular.x,
     (*navigator_msg)->body_acceleration.angular.x,
     dt,
     kp_roll_,
@@ -339,7 +422,7 @@ controller_interface::return_type BodyVelocityController::update(
     roll_pid_);
 
   const double torque_y = computePid(
-    desired_velocity.angular.y - (*navigator_msg)->body_velocity.angular.y,
+    setpoint_angular_y - (*navigator_msg)->body_velocity.angular.y,
     (*navigator_msg)->body_acceleration.angular.y,
     dt,
     kp_pitch_,
@@ -348,7 +431,7 @@ controller_interface::return_type BodyVelocityController::update(
     pitch_pid_);
 
   const double torque_z = computePid(
-    desired_velocity.angular.z - (*navigator_msg)->body_velocity.angular.z,
+    setpoint_angular_z - (*navigator_msg)->body_velocity.angular.z,
     (*navigator_msg)->body_acceleration.angular.z,
     dt,
     kp_yaw_,
@@ -370,4 +453,4 @@ controller_interface::return_type BodyVelocityController::update(
 
 PLUGINLIB_EXPORT_CLASS(
   cirtesub_controllers::BodyVelocityController,
-  controller_interface::ControllerInterface)
+  controller_interface::ChainableControllerInterface)
