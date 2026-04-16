@@ -198,12 +198,6 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
     kp_depth_,
     ki_depth_,
     kd_depth_);
-  RCLCPP_INFO(
-    get_node()->get_logger(),
-    "Depth control gains configured: kp=%.3f ki=%.3f kd=%.3f",
-    kp_depth_,
-    ki_depth_,
-    kd_depth_);
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&DepthHoldController::parametersCallback, this, std::placeholders::_1));
@@ -240,7 +234,25 @@ controller_interface::CallbackReturn DepthHoldController::on_activate(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Depth control gains activated: kp=%.3f ki=%.3f kd=%.3f",
+    "Depth hold feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
+    feedforward_gain_x_,
+    feedforward_gain_y_,
+    feedforward_gain_z_,
+    feedforward_gain_roll_,
+    feedforward_gain_pitch_,
+    feedforward_gain_yaw_);
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "Depth hold PID gains loaded: roll(kp=%.3f ki=%.3f kd=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f) depth(kp=%.3f ki=%.3f kd=%.3f)",
+    kp_roll_,
+    ki_roll_,
+    kd_roll_,
+    kp_pitch_,
+    ki_pitch_,
+    kd_pitch_,
+    kp_yaw_,
+    ki_yaw_,
+    kd_yaw_,
     kp_depth_,
     ki_depth_,
     kd_depth_);
