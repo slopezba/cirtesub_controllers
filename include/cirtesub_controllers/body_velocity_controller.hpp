@@ -39,36 +39,67 @@ private:
   using TwistMsg = geometry_msgs::msg::Twist;
   using NavigatorMsg = sura_msgs::msg::Navigator;
 
+  struct AxisPidState
+  {
+    double integral{0.0};
+  };
+
   rcl_interfaces::msg::SetParametersResult parametersCallback(
     const std::vector<rclcpp::Parameter> & params);
 
-  rclcpp::Subscription<TwistMsg>::SharedPtr cmd_vel_sub_;
+  double computePid(
+    double error,
+    double measured_acceleration,
+    double dt,
+    double kp,
+    double ki,
+    double kd,
+    AxisPidState & state);
+
+  void logGains(const std::string & context) const;
+
+  rclcpp::Subscription<TwistMsg>::SharedPtr setpoint_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
 
-  realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> cmd_vel_buffer_;
+  realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> setpoint_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
 
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
 
-  std::string cmd_vel_topic_;
+  std::string setpoint_topic_;
   std::string navigator_topic_;
   std::string body_force_controller_name_;
 
-  double kp_u_{0.0};
-  double ki_u_{0.0};
-  double kd_u_{0.0};
+  double kp_x_{0.0};
+  double ki_x_{0.0};
+  double kd_x_{0.0};
 
-  double kp_r_{0.0};
-  double ki_r_{0.0};
-  double kd_r_{0.0};
+  double kp_y_{0.0};
+  double ki_y_{0.0};
+  double kd_y_{0.0};
 
-  double integral_u_{0.0};
-  double integral_r_{0.0};
+  double kp_z_{0.0};
+  double ki_z_{0.0};
+  double kd_z_{0.0};
 
-  double prev_error_u_{0.0};
-  double prev_error_r_{0.0};
+  double kp_roll_{0.0};
+  double ki_roll_{0.0};
+  double kd_roll_{0.0};
 
-  bool first_update_{true};
+  double kp_pitch_{0.0};
+  double ki_pitch_{0.0};
+  double kd_pitch_{0.0};
+
+  double kp_yaw_{0.0};
+  double ki_yaw_{0.0};
+  double kd_yaw_{0.0};
+
+  AxisPidState x_pid_;
+  AxisPidState y_pid_;
+  AxisPidState z_pid_;
+  AxisPidState roll_pid_;
+  AxisPidState pitch_pid_;
+  AxisPidState yaw_pid_;
 };
 
 }  // namespace cirtesub_controllers
