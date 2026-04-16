@@ -198,6 +198,12 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
     kp_depth_,
     ki_depth_,
     kd_depth_);
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "Depth control gains configured: kp=%.3f ki=%.3f kd=%.3f",
+    kp_depth_,
+    ki_depth_,
+    kd_depth_);
 
   param_callback_handle_ = get_node()->add_on_set_parameters_callback(
     std::bind(&DepthHoldController::parametersCallback, this, std::placeholders::_1));
@@ -231,6 +237,13 @@ controller_interface::CallbackReturn DepthHoldController::on_activate(
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
   }
+
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "Depth control gains activated: kp=%.3f ki=%.3f kd=%.3f",
+    kp_depth_,
+    ki_depth_,
+    kd_depth_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
