@@ -26,4 +26,11 @@
     base_class_type="controller_interface::ChainableControllerInterface">
     <description>Attitude stabilization controller with yaw and depth hold</description>
   </class>
+
+  <class
+    name="cirtesub_controllers/PositionHoldController"
+    type="cirtesub_controllers::PositionHoldController"
+    base_class_type="controller_interface::ChainableControllerInterface">
+    <description>Position hold controller chained into the body velocity controller</description>
+  </class>
 </library>
