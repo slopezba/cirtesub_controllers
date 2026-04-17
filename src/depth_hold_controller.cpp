@@ -129,10 +129,10 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
   depth_command_threshold_ =
     std::max(0.0, get_node()->get_parameter("depth_command_threshold").as_double());
 
-  feedforward_sub_ = get_node()->create_subscription<TwistMsg>(
+  feedforward_sub_ = get_node()->create_subscription<WrenchMsg>(
     feedforward_topic_,
     rclcpp::SystemDefaultsQoS(),
-    [this](const TwistMsg::SharedPtr msg)
+    [this](const WrenchMsg::SharedPtr msg)
     {
       feedforward_buffer_.writeFromNonRT(msg);
     });
@@ -173,6 +173,17 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<SetPointMsg>>(setpoint_pub_);
   allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
+  reference_interface_names_ = {
+    "force.x",
+    "force.y",
+    "force.z",
+    "torque.x",
+    "torque.y",
+    "torque.z"
+  };
+  reference_interfaces_.resize(
+    reference_interface_names_.size(),
+    std::numeric_limits<double>::quiet_NaN());
 
   RCLCPP_INFO(
     get_node()->get_logger(),
@@ -227,6 +238,10 @@ controller_interface::CallbackReturn DepthHoldController::on_activate(
   zero_roll_pitch_requested_.store(false);
   allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
   first_update_ = true;
+  std::fill(
+    reference_interfaces_.begin(),
+    reference_interfaces_.end(),
+    std::numeric_limits<double>::quiet_NaN());
 
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
@@ -282,6 +297,10 @@ controller_interface::CallbackReturn DepthHoldController::on_deactivate(
   zero_roll_pitch_requested_.store(false);
   allow_roll_pitch_buffer_.writeFromNonRT(allow_roll_pitch_);
   first_update_ = true;
+  std::fill(
+    reference_interfaces_.begin(),
+    reference_interfaces_.end(),
+    std::numeric_limits<double>::quiet_NaN());
 
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
@@ -418,11 +437,60 @@ void DepthHoldController::publishSetpoint()
   }
 }
 
-controller_interface::return_type DepthHoldController::update(
+std::vector<hardware_interface::CommandInterface>
+DepthHoldController::on_export_reference_interfaces()
+{
+  std::vector<hardware_interface::CommandInterface> exported_reference_interfaces;
+  exported_reference_interfaces.reserve(reference_interface_names_.size());
+
+  for (size_t i = 0; i < reference_interface_names_.size(); ++i) {
+    exported_reference_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        get_node()->get_name(),
+        reference_interface_names_[i],
+        &reference_interfaces_[i]));
+  }
+
+  return exported_reference_interfaces;
+}
+
+bool DepthHoldController::on_set_chained_mode(bool chained_mode)
+{
+  if (chained_mode) {
+    RCLCPP_INFO(get_node()->get_logger(), "DepthHoldController switched to chained mode");
+  } else {
+    RCLCPP_INFO(get_node()->get_logger(), "DepthHoldController switched to topic mode");
+    std::fill(
+      reference_interfaces_.begin(),
+      reference_interfaces_.end(),
+      std::numeric_limits<double>::quiet_NaN());
+  }
+
+  return true;
+}
+
+controller_interface::return_type DepthHoldController::update_reference_from_subscribers()
+{
+  auto feedforward_msg = feedforward_buffer_.readFromRT();
+
+  if (!feedforward_msg || !(*feedforward_msg)) {
+    return controller_interface::return_type::OK;
+  }
+
+  reference_interfaces_[0] = (*feedforward_msg)->force.x;
+  reference_interfaces_[1] = (*feedforward_msg)->force.y;
+  reference_interfaces_[2] = (*feedforward_msg)->force.z;
+  reference_interfaces_[3] = (*feedforward_msg)->torque.x;
+  reference_interfaces_[4] = (*feedforward_msg)->torque.y;
+  reference_interfaces_[5] = (*feedforward_msg)->torque.z;
+
+  return controller_interface::return_type::OK;
+}
+
+controller_interface::return_type DepthHoldController::update_and_write_commands(
   const rclcpp::Time &,
   const rclcpp::Duration & period)
 {
-  auto feedforward_msg = feedforward_buffer_.readFromRT();
   auto navigator_msg = navigator_buffer_.readFromRT();
 
   if (!navigator_msg || !(*navigator_msg)) {
@@ -465,20 +533,17 @@ controller_interface::return_type DepthHoldController::update(
   }
 
   const double force_x =
-    (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->linear.x * feedforward_gain_x_ : 0.0;
+    std::isnan(reference_interfaces_[0]) ? 0.0 : reference_interfaces_[0] * feedforward_gain_x_;
   const double force_y =
-    (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->linear.y * feedforward_gain_y_ : 0.0;
+    std::isnan(reference_interfaces_[1]) ? 0.0 : reference_interfaces_[1] * feedforward_gain_y_;
   const double force_ff_z =
-    (feedforward_msg && *feedforward_msg) ? (*feedforward_msg)->linear.z * feedforward_gain_z_ : 0.0;
+    std::isnan(reference_interfaces_[2]) ? 0.0 : reference_interfaces_[2] * feedforward_gain_z_;
   const double torque_ff_x =
-    (feedforward_msg && *feedforward_msg) ?
-    (*feedforward_msg)->angular.x * feedforward_gain_roll_ : 0.0;
+    std::isnan(reference_interfaces_[3]) ? 0.0 : reference_interfaces_[3] * feedforward_gain_roll_;
   const double torque_ff_y =
-    (feedforward_msg && *feedforward_msg) ?
-    (*feedforward_msg)->angular.y * feedforward_gain_pitch_ : 0.0;
+    std::isnan(reference_interfaces_[4]) ? 0.0 : reference_interfaces_[4] * feedforward_gain_pitch_;
   const double yaw_feedforward =
-    (feedforward_msg && *feedforward_msg) ?
-    (*feedforward_msg)->angular.z * feedforward_gain_yaw_ : 0.0;
+    std::isnan(reference_interfaces_[5]) ? 0.0 : reference_interfaces_[5] * feedforward_gain_yaw_;
   const bool * allow_roll_pitch_ptr = allow_roll_pitch_buffer_.readFromRT();
   const bool allow_roll_pitch = allow_roll_pitch_ptr ? *allow_roll_pitch_ptr : false;
   const bool zero_roll_pitch_requested =
@@ -578,4 +643,4 @@ controller_interface::return_type DepthHoldController::update(
 
 PLUGINLIB_EXPORT_CLASS(
   cirtesub_controllers::DepthHoldController,
-  controller_interface::ControllerInterface)
+  controller_interface::ChainableControllerInterface)

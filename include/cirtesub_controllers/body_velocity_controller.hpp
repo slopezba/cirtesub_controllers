@@ -7,10 +7,11 @@
 
 #include "controller_interface/chainable_controller_interface.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "hardware_interface/loaned_command_interface.hpp"
+#include "geometry_msgs/msg/wrench.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
+#include "realtime_tools/realtime_publisher.hpp"
 #include "sura_msgs/msg/navigator.hpp"
 
 namespace cirtesub_controllers
@@ -46,6 +47,7 @@ protected:
 
 private:
   using TwistMsg = geometry_msgs::msg::Twist;
+  using WrenchMsg = geometry_msgs::msg::Wrench;
   using NavigatorMsg = sura_msgs::msg::Navigator;
 
   struct AxisPidState
@@ -63,12 +65,15 @@ private:
     double kp,
     double ki,
     double kd,
+    double antiwindup,
     AxisPidState & state);
 
   void logGains(const std::string & context) const;
 
   rclcpp::Subscription<TwistMsg>::SharedPtr setpoint_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
+  rclcpp::Publisher<WrenchMsg>::SharedPtr feedforward_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<WrenchMsg>> feedforward_rt_pub_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> setpoint_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
@@ -77,32 +82,39 @@ private:
 
   std::string setpoint_topic_;
   std::string navigator_topic_;
+  std::string feedforward_topic_;
   std::string body_force_controller_name_;
   std::vector<std::string> reference_interface_names_;
 
   double kp_x_{0.0};
   double ki_x_{0.0};
   double kd_x_{0.0};
+  double antiwindup_x_{0.0};
 
   double kp_y_{0.0};
   double ki_y_{0.0};
   double kd_y_{0.0};
+  double antiwindup_y_{0.0};
 
   double kp_z_{0.0};
   double ki_z_{0.0};
   double kd_z_{0.0};
+  double antiwindup_z_{0.0};
 
   double kp_roll_{0.0};
   double ki_roll_{0.0};
   double kd_roll_{0.0};
+  double antiwindup_roll_{0.0};
 
   double kp_pitch_{0.0};
   double ki_pitch_{0.0};
   double kd_pitch_{0.0};
+  double antiwindup_pitch_{0.0};
 
   double kp_yaw_{0.0};
   double ki_yaw_{0.0};
   double kd_yaw_{0.0};
+  double antiwindup_yaw_{0.0};
 
   AxisPidState x_pid_;
   AxisPidState y_pid_;

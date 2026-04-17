@@ -1,13 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "controller_interface/controller_interface.hpp"
+#include "controller_interface/chainable_controller_interface.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
-#include "geometry_msgs/msg/twist.hpp"
+#include "geometry_msgs/msg/wrench.hpp"
+#include "hardware_interface/loaned_command_interface.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
@@ -18,7 +20,7 @@
 namespace cirtesub_controllers
 {
 
-class StabilizeController : public controller_interface::ControllerInterface
+class StabilizeController : public controller_interface::ChainableControllerInterface
 {
 public:
   controller_interface::CallbackReturn on_init() override;
@@ -35,12 +37,19 @@ public:
   controller_interface::CallbackReturn on_deactivate(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  controller_interface::return_type update(
+protected:
+  std::vector<hardware_interface::CommandInterface> on_export_reference_interfaces() override;
+
+  bool on_set_chained_mode(bool chained_mode) override;
+
+  controller_interface::return_type update_reference_from_subscribers() override;
+
+  controller_interface::return_type update_and_write_commands(
     const rclcpp::Time & time,
     const rclcpp::Duration & period) override;
 
 private:
-  using TwistMsg = geometry_msgs::msg::Twist;
+  using WrenchMsg = geometry_msgs::msg::Wrench;
   using Vector3Msg = geometry_msgs::msg::Vector3;
   using NavigatorMsg = sura_msgs::msg::Navigator;
   using TriggerSrv = std_srvs::srv::Trigger;
@@ -66,14 +75,14 @@ private:
   void publishSetpoint();
   void setRollPitchEnabled(bool enabled, bool request_zero_setpoint);
 
-  rclcpp::Subscription<TwistMsg>::SharedPtr feedforward_sub_;
+  rclcpp::Subscription<WrenchMsg>::SharedPtr feedforward_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
   rclcpp::Service<TriggerSrv>::SharedPtr enable_roll_pitch_srv_;
   rclcpp::Service<TriggerSrv>::SharedPtr disable_roll_pitch_srv_;
   rclcpp::Publisher<Vector3Msg>::SharedPtr setpoint_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<Vector3Msg>> setpoint_rt_pub_;
 
-  realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> feedforward_buffer_;
+  realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> feedforward_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
   realtime_tools::RealtimeBuffer<bool> allow_roll_pitch_buffer_;
 
@@ -85,6 +94,7 @@ private:
   std::string enable_roll_pitch_service_name_;
   std::string disable_roll_pitch_service_name_;
   std::string body_force_controller_name_;
+  std::vector<std::string> reference_interface_names_;
 
   double kp_roll_{0.0};
   double ki_roll_{0.0};
@@ -105,6 +115,8 @@ private:
   double feedforward_gain_roll_{1.0};
   double feedforward_gain_pitch_{1.0};
   double feedforward_gain_yaw_{1.0};
+  double roll_command_threshold_{1e-3};
+  double pitch_command_threshold_{1e-3};
   double yaw_command_threshold_{1e-3};
   double roll_setpoint_{0.0};
   double pitch_setpoint_{0.0};

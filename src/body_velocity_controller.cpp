@@ -19,31 +19,39 @@ controller_interface::CallbackReturn BodyVelocityController::on_init()
     auto_declare<std::string>(
       "navigator_topic", "/cirtesub/navigator/navigation");
     auto_declare<std::string>(
+      "feedforward_topic", "/stabilize_controller/feedforward");
+    auto_declare<std::string>(
       "body_force_controller_name", "body_force_controller");
 
     auto_declare<double>("kp_x", 0.0);
     auto_declare<double>("ki_x", 0.0);
     auto_declare<double>("kd_x", 0.0);
+    auto_declare<double>("antiwindup_x", 0.0);
 
     auto_declare<double>("kp_y", 0.0);
     auto_declare<double>("ki_y", 0.0);
     auto_declare<double>("kd_y", 0.0);
+    auto_declare<double>("antiwindup_y", 0.0);
 
     auto_declare<double>("kp_z", 0.0);
     auto_declare<double>("ki_z", 0.0);
     auto_declare<double>("kd_z", 0.0);
+    auto_declare<double>("antiwindup_z", 0.0);
 
     auto_declare<double>("kp_roll", 0.0);
     auto_declare<double>("ki_roll", 0.0);
     auto_declare<double>("kd_roll", 0.0);
+    auto_declare<double>("antiwindup_roll", 0.0);
 
     auto_declare<double>("kp_pitch", 0.0);
     auto_declare<double>("ki_pitch", 0.0);
     auto_declare<double>("kd_pitch", 0.0);
+    auto_declare<double>("antiwindup_pitch", 0.0);
 
     auto_declare<double>("kp_yaw", 0.0);
     auto_declare<double>("ki_yaw", 0.0);
     auto_declare<double>("kd_yaw", 0.0);
+    auto_declare<double>("antiwindup_yaw", 0.0);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception in on_init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -55,18 +63,8 @@ controller_interface::CallbackReturn BodyVelocityController::on_init()
 controller_interface::InterfaceConfiguration
 BodyVelocityController::command_interface_configuration() const
 {
-  const std::string prefix = body_force_controller_name_;
-
   return {
-    controller_interface::interface_configuration_type::INDIVIDUAL,
-    {
-      prefix + "/force.x",
-      prefix + "/force.y",
-      prefix + "/force.z",
-      prefix + "/torque.x",
-      prefix + "/torque.y",
-      prefix + "/torque.z"
-    }
+    controller_interface::interface_configuration_type::NONE
   };
 }
 
@@ -83,32 +81,39 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
 {
   setpoint_topic_ = get_node()->get_parameter("setpoint_topic").as_string();
   navigator_topic_ = get_node()->get_parameter("navigator_topic").as_string();
+  feedforward_topic_ = get_node()->get_parameter("feedforward_topic").as_string();
   body_force_controller_name_ =
     get_node()->get_parameter("body_force_controller_name").as_string();
 
   kp_x_ = get_node()->get_parameter("kp_x").as_double();
   ki_x_ = get_node()->get_parameter("ki_x").as_double();
   kd_x_ = get_node()->get_parameter("kd_x").as_double();
+  antiwindup_x_ = std::abs(get_node()->get_parameter("antiwindup_x").as_double());
 
   kp_y_ = get_node()->get_parameter("kp_y").as_double();
   ki_y_ = get_node()->get_parameter("ki_y").as_double();
   kd_y_ = get_node()->get_parameter("kd_y").as_double();
+  antiwindup_y_ = std::abs(get_node()->get_parameter("antiwindup_y").as_double());
 
   kp_z_ = get_node()->get_parameter("kp_z").as_double();
   ki_z_ = get_node()->get_parameter("ki_z").as_double();
   kd_z_ = get_node()->get_parameter("kd_z").as_double();
+  antiwindup_z_ = std::abs(get_node()->get_parameter("antiwindup_z").as_double());
 
   kp_roll_ = get_node()->get_parameter("kp_roll").as_double();
   ki_roll_ = get_node()->get_parameter("ki_roll").as_double();
   kd_roll_ = get_node()->get_parameter("kd_roll").as_double();
+  antiwindup_roll_ = std::abs(get_node()->get_parameter("antiwindup_roll").as_double());
 
   kp_pitch_ = get_node()->get_parameter("kp_pitch").as_double();
   ki_pitch_ = get_node()->get_parameter("ki_pitch").as_double();
   kd_pitch_ = get_node()->get_parameter("kd_pitch").as_double();
+  antiwindup_pitch_ = std::abs(get_node()->get_parameter("antiwindup_pitch").as_double());
 
   kp_yaw_ = get_node()->get_parameter("kp_yaw").as_double();
   ki_yaw_ = get_node()->get_parameter("ki_yaw").as_double();
   kd_yaw_ = get_node()->get_parameter("kd_yaw").as_double();
+  antiwindup_yaw_ = std::abs(get_node()->get_parameter("antiwindup_yaw").as_double());
 
   setpoint_sub_ = get_node()->create_subscription<TwistMsg>(
     setpoint_topic_,
@@ -125,6 +130,12 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
     {
       navigator_buffer_.writeFromNonRT(msg);
     });
+
+  feedforward_pub_ = get_node()->create_publisher<WrenchMsg>(
+    feedforward_topic_,
+    rclcpp::SystemDefaultsQoS());
+  feedforward_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(feedforward_pub_);
 
   reference_interface_names_ = {
     "linear.x",
@@ -145,6 +156,7 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
   RCLCPP_INFO(get_node()->get_logger(), "Configured BodyVelocityController");
   RCLCPP_INFO(get_node()->get_logger(), "setpoint topic: %s", setpoint_topic_.c_str());
   RCLCPP_INFO(get_node()->get_logger(), "navigator topic: %s", navigator_topic_.c_str());
+  RCLCPP_INFO(get_node()->get_logger(), "feedforward topic: %s", feedforward_topic_.c_str());
   RCLCPP_INFO(
     get_node()->get_logger(),
     "body_force_controller_name: %s",
@@ -169,10 +181,6 @@ controller_interface::CallbackReturn BodyVelocityController::on_activate(
     reference_interfaces_.end(),
     std::numeric_limits<double>::quiet_NaN());
 
-  for (auto & command_interface : command_interfaces_) {
-    command_interface.set_value(0.0);
-  }
-
   logGains("Body velocity controller activated with gains");
 
   return controller_interface::CallbackReturn::SUCCESS;
@@ -193,8 +201,9 @@ controller_interface::CallbackReturn BodyVelocityController::on_deactivate(
     reference_interfaces_.end(),
     std::numeric_limits<double>::quiet_NaN());
 
-  for (auto & command_interface : command_interfaces_) {
-    command_interface.set_value(0.0);
+  if (feedforward_rt_pub_ && feedforward_rt_pub_->trylock()) {
+    feedforward_rt_pub_->msg_ = WrenchMsg{};
+    feedforward_rt_pub_->unlockAndPublish();
   }
 
   return controller_interface::CallbackReturn::SUCCESS;
@@ -217,6 +226,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       x_pid_.integral = 0.0;
     } else if (name == "kd_x") {
       kd_x_ = param.as_double();
+    } else if (name == "antiwindup_x") {
+      antiwindup_x_ = std::abs(param.as_double());
     } else if (name == "kp_y") {
       kp_y_ = param.as_double();
     } else if (name == "ki_y") {
@@ -224,6 +235,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       y_pid_.integral = 0.0;
     } else if (name == "kd_y") {
       kd_y_ = param.as_double();
+    } else if (name == "antiwindup_y") {
+      antiwindup_y_ = std::abs(param.as_double());
     } else if (name == "kp_z") {
       kp_z_ = param.as_double();
     } else if (name == "ki_z") {
@@ -231,6 +244,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       z_pid_.integral = 0.0;
     } else if (name == "kd_z") {
       kd_z_ = param.as_double();
+    } else if (name == "antiwindup_z") {
+      antiwindup_z_ = std::abs(param.as_double());
     } else if (name == "kp_roll") {
       kp_roll_ = param.as_double();
     } else if (name == "ki_roll") {
@@ -238,6 +253,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       roll_pid_.integral = 0.0;
     } else if (name == "kd_roll") {
       kd_roll_ = param.as_double();
+    } else if (name == "antiwindup_roll") {
+      antiwindup_roll_ = std::abs(param.as_double());
     } else if (name == "kp_pitch") {
       kp_pitch_ = param.as_double();
     } else if (name == "ki_pitch") {
@@ -245,6 +262,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       pitch_pid_.integral = 0.0;
     } else if (name == "kd_pitch") {
       kd_pitch_ = param.as_double();
+    } else if (name == "antiwindup_pitch") {
+      antiwindup_pitch_ = std::abs(param.as_double());
     } else if (name == "kp_yaw") {
       kp_yaw_ = param.as_double();
     } else if (name == "ki_yaw") {
@@ -252,6 +271,8 @@ rcl_interfaces::msg::SetParametersResult BodyVelocityController::parametersCallb
       yaw_pid_.integral = 0.0;
     } else if (name == "kd_yaw") {
       kd_yaw_ = param.as_double();
+    } else if (name == "antiwindup_yaw") {
+      antiwindup_yaw_ = std::abs(param.as_double());
     }
   }
 
@@ -267,9 +288,13 @@ double BodyVelocityController::computePid(
   double kp,
   double ki,
   double kd,
+  double antiwindup,
   AxisPidState & state)
 {
   state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
   const double derivative = -measured_acceleration;
   return kp * error + ki * state.integral + kd * derivative;
 }
@@ -278,26 +303,32 @@ void BodyVelocityController::logGains(const std::string & context) const
 {
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "%s: x(kp=%.3f ki=%.3f kd=%.3f) y(kp=%.3f ki=%.3f kd=%.3f) z(kp=%.3f ki=%.3f kd=%.3f) roll(kp=%.3f ki=%.3f kd=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f)",
+    "%s: x(kp=%.3f ki=%.3f kd=%.3f aw=%.3f) y(kp=%.3f ki=%.3f kd=%.3f aw=%.3f) z(kp=%.3f ki=%.3f kd=%.3f aw=%.3f) roll(kp=%.3f ki=%.3f kd=%.3f aw=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f aw=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f aw=%.3f)",
     context.c_str(),
     kp_x_,
     ki_x_,
     kd_x_,
+    antiwindup_x_,
     kp_y_,
     ki_y_,
     kd_y_,
+    antiwindup_y_,
     kp_z_,
     ki_z_,
     kd_z_,
+    antiwindup_z_,
     kp_roll_,
     ki_roll_,
     kd_roll_,
+    antiwindup_roll_,
     kp_pitch_,
     ki_pitch_,
     kd_pitch_,
+    antiwindup_pitch_,
     kp_yaw_,
     ki_yaw_,
-    kd_yaw_);
+    kd_yaw_,
+    antiwindup_yaw_);
 }
 
 std::vector<hardware_interface::CommandInterface>
@@ -360,16 +391,6 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     return controller_interface::return_type::OK;
   }
 
-  if (command_interfaces_.size() != 6) {
-    RCLCPP_ERROR_THROTTLE(
-      get_node()->get_logger(),
-      *get_node()->get_clock(),
-      2000,
-      "Expected 6 command interfaces, got %zu",
-      command_interfaces_.size());
-    return controller_interface::return_type::ERROR;
-  }
-
   const double dt = period.seconds();
 
   const double setpoint_linear_x =
@@ -392,6 +413,7 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_x_,
     ki_x_,
     kd_x_,
+    antiwindup_x_,
     x_pid_);
 
   const double force_y = computePid(
@@ -401,6 +423,7 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_y_,
     ki_y_,
     kd_y_,
+    antiwindup_y_,
     y_pid_);
 
   const double force_z = computePid(
@@ -410,6 +433,7 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_z_,
     ki_z_,
     kd_z_,
+    antiwindup_z_,
     z_pid_);
 
   const double torque_x = computePid(
@@ -419,6 +443,7 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_roll_,
     ki_roll_,
     kd_roll_,
+    antiwindup_roll_,
     roll_pid_);
 
   const double torque_y = computePid(
@@ -428,6 +453,7 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_pitch_,
     ki_pitch_,
     kd_pitch_,
+    antiwindup_pitch_,
     pitch_pid_);
 
   const double torque_z = computePid(
@@ -437,14 +463,18 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kp_yaw_,
     ki_yaw_,
     kd_yaw_,
+    antiwindup_yaw_,
     yaw_pid_);
 
-  command_interfaces_[0].set_value(force_x);
-  command_interfaces_[1].set_value(force_y);
-  command_interfaces_[2].set_value(force_z);
-  command_interfaces_[3].set_value(torque_x);
-  command_interfaces_[4].set_value(torque_y);
-  command_interfaces_[5].set_value(torque_z);
+  if (feedforward_rt_pub_ && feedforward_rt_pub_->trylock()) {
+    feedforward_rt_pub_->msg_.force.x = force_x;
+    feedforward_rt_pub_->msg_.force.y = force_y;
+    feedforward_rt_pub_->msg_.force.z = force_z;
+    feedforward_rt_pub_->msg_.torque.x = torque_x;
+    feedforward_rt_pub_->msg_.torque.y = torque_y;
+    feedforward_rt_pub_->msg_.torque.z = torque_z;
+    feedforward_rt_pub_->unlockAndPublish();
+  }
 
   return controller_interface::return_type::OK;
 }
