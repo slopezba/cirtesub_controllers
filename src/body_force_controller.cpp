@@ -1,6 +1,7 @@
 #include "cirtesub_controllers/body_force_controller.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <stdexcept>
 #include <sstream>
@@ -211,11 +212,56 @@ Eigen::MatrixXd BodyForceController::pseudoInverse(
   return svd.matrixV() * singular_values_inv * svd.matrixU().transpose();
 }
 
+void BodyForceController::resetDebugStats()
+{
+  debug_desired_period_us_.store(0, std::memory_order_relaxed);
+  debug_cycle_count_.store(0, std::memory_order_relaxed);
+  debug_deadline_miss_count_.store(0, std::memory_order_relaxed);
+  debug_total_update_us_.store(0, std::memory_order_relaxed);
+  debug_last_update_us_.store(0, std::memory_order_relaxed);
+  debug_max_update_us_.store(0, std::memory_order_relaxed);
+  debug_min_update_us_.store(
+    std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+}
+
+void BodyForceController::publishDebugStats()
+{
+  if (!debug_enabled_ || !debug_pub_) {
+    return;
+  }
+
+  const uint64_t cycle_count = debug_cycle_count_.load(std::memory_order_relaxed);
+  const uint64_t total_update_us = debug_total_update_us_.load(std::memory_order_relaxed);
+  const uint64_t min_update_us = debug_min_update_us_.load(std::memory_order_relaxed);
+
+  DebugMsg msg;
+  msg.header.stamp = get_node()->now();
+  msg.controller_name = get_node()->get_name();
+  msg.active = controller_active_;
+  msg.chained_mode = chained_mode_;
+  msg.desired_period_us =
+    static_cast<double>(debug_desired_period_us_.load(std::memory_order_relaxed));
+  msg.last_update_us =
+    static_cast<double>(debug_last_update_us_.load(std::memory_order_relaxed));
+  msg.avg_update_us =
+    cycle_count > 0 ? static_cast<double>(total_update_us) / static_cast<double>(cycle_count) : 0.0;
+  msg.max_update_us =
+    static_cast<double>(debug_max_update_us_.load(std::memory_order_relaxed));
+  msg.min_update_us = static_cast<double>(
+    min_update_us == std::numeric_limits<uint64_t>::max() ? 0ULL : min_update_us);
+  msg.deadline_miss_count =
+    debug_deadline_miss_count_.load(std::memory_order_relaxed);
+  msg.cycle_count = cycle_count;
+
+  debug_pub_->publish(msg);
+}
+
 controller_interface::CallbackReturn BodyForceController::on_init()
 {
   try {
     auto_declare<std::string>("input_topic", "/body_force/command");
     auto_declare<std::string>("base_link", "base_link");
+    auto_declare<bool>("debug.enabled", false);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception in on_init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -265,6 +311,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
 {
   input_topic_ = get_node()->get_parameter("input_topic").as_string();
   base_link_ = get_node()->get_parameter("base_link").as_string();
+  debug_enabled_ = get_node()->get_parameter("debug.enabled").as_bool();
 
   const std::string robot_description =
     get_node()->get_parameter("robot_description").as_string();
@@ -291,6 +338,9 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   if (!buildThrusterAllocationMatrix(model, base_link_, thruster_joints_)) {
     return controller_interface::CallbackReturn::ERROR;
   }
+  thruster_allocation_matrix_pinv_ = pseudoInverse(thruster_allocation_matrix_);
+  thruster_forces_.resize(static_cast<Eigen::Index>(thruster_joints_.size()));
+  thruster_forces_.setZero();
 
   body_force_sub_ = this->get_node()->create_subscription<WrenchMsg>(
     input_topic_,
@@ -299,6 +349,24 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
     {
       rt_buffer_ptr_.writeFromNonRT(msg);
     });
+
+  debug_pub_.reset();
+  debug_timer_.reset();
+  resetDebugStats();
+
+  if (debug_enabled_) {
+    debug_pub_ = this->get_node()->create_publisher<DebugMsg>("/cirtesub/controller_debug", 10);
+    debug_timer_ = this->get_node()->create_wall_timer(
+      std::chrono::seconds(1),
+      [this]()
+      {
+        publishDebugStats();
+      });
+
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "Debug profiling enabled. Publishing ControllerDebug messages to '/cirtesub/controller_debug'.");
+  }
 
   reference_interface_names_ = {
     "force.x",
@@ -319,6 +387,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   RCLCPP_INFO(get_node()->get_logger(), "Input topic: %s", input_topic_.c_str());
   RCLCPP_INFO(get_node()->get_logger(), "Base link: %s", base_link_.c_str());
   RCLCPP_INFO(get_node()->get_logger(), "Thruster joints discovered: %zu", thruster_joints_.size());
+  RCLCPP_INFO(get_node()->get_logger(), "Precomputed thruster allocation pseudoinverse");
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -327,11 +396,14 @@ controller_interface::CallbackReturn BodyForceController::on_activate(
   const rclcpp_lifecycle::State &)
 {
   rt_buffer_ptr_ = realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>>(nullptr);
+  controller_active_ = true;
 
   std::fill(
     reference_interfaces_.begin(),
     reference_interfaces_.end(),
     std::numeric_limits<double>::quiet_NaN());
+
+  resetDebugStats();
 
   RCLCPP_INFO(get_node()->get_logger(), "Activated BodyForceController");
   return controller_interface::CallbackReturn::SUCCESS;
@@ -341,6 +413,10 @@ controller_interface::CallbackReturn BodyForceController::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
   rt_buffer_ptr_ = realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>>(nullptr);
+  controller_active_ = false;
+  if (debug_enabled_ && debug_pub_) {
+    publishDebugStats();
+  }
 
   for (auto & command_interface : command_interfaces_) {
     command_interface.set_value(0.0);
@@ -368,6 +444,7 @@ BodyForceController::on_export_reference_interfaces()
 
 bool BodyForceController::on_set_chained_mode(bool chained_mode)
 {
+  chained_mode_ = chained_mode;
   if (chained_mode) {
     RCLCPP_INFO(get_node()->get_logger(), "BodyForceController switched to chained mode");
   } else {
@@ -394,9 +471,12 @@ controller_interface::return_type BodyForceController::update_reference_from_sub
 
 controller_interface::return_type BodyForceController::update_and_write_commands(
   const rclcpp::Time &,
-  const rclcpp::Duration &)
+  const rclcpp::Duration & period)
 {
-  Eigen::Matrix<double, 6, 1> desired_wrench;
+  const auto update_start = debug_enabled_ ? std::chrono::steady_clock::now() :
+    std::chrono::steady_clock::time_point{};
+
+  BodyWrenchVector desired_wrench;
   desired_wrench.setZero();
 
   for (size_t i = 0; i < 6; ++i) {
@@ -405,10 +485,9 @@ controller_interface::return_type BodyForceController::update_and_write_commands
     }
   }
 
-  const Eigen::MatrixXd B_pinv = pseudoInverse(thruster_allocation_matrix_);
-  const Eigen::VectorXd thruster_forces = B_pinv * desired_wrench;
+  thruster_forces_.noalias() = thruster_allocation_matrix_pinv_ * desired_wrench;
 
-  if (thruster_forces.size() != static_cast<int>(command_interfaces_.size())) {
+  if (thruster_forces_.size() != static_cast<int>(command_interfaces_.size())) {
     RCLCPP_ERROR_THROTTLE(
       get_node()->get_logger(),
       *get_node()->get_clock(),
@@ -417,8 +496,39 @@ controller_interface::return_type BodyForceController::update_and_write_commands
     return controller_interface::return_type::ERROR;
   }
 
-  for (int i = 0; i < thruster_forces.size(); ++i) {
-    command_interfaces_[i].set_value(thruster_forces(i));
+  for (int i = 0; i < thruster_forces_.size(); ++i) {
+    command_interfaces_[i].set_value(thruster_forces_(i));
+  }
+
+  if (debug_enabled_) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - update_start).count();
+    const uint64_t elapsed_us = static_cast<uint64_t>(std::max<int64_t>(elapsed, 0));
+    const uint64_t target_period_us = static_cast<uint64_t>(
+      std::max<int64_t>(period.nanoseconds() / 1000, 0));
+    debug_desired_period_us_.store(target_period_us, std::memory_order_relaxed);
+
+    debug_cycle_count_.fetch_add(1, std::memory_order_relaxed);
+    debug_total_update_us_.fetch_add(elapsed_us, std::memory_order_relaxed);
+    debug_last_update_us_.store(elapsed_us, std::memory_order_relaxed);
+
+    uint64_t current_max = debug_max_update_us_.load(std::memory_order_relaxed);
+    while (elapsed_us > current_max &&
+      !debug_max_update_us_.compare_exchange_weak(
+        current_max, elapsed_us, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+
+    uint64_t current_min = debug_min_update_us_.load(std::memory_order_relaxed);
+    while (elapsed_us < current_min &&
+      !debug_min_update_us_.compare_exchange_weak(
+        current_min, elapsed_us, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+
+    if (target_period_us > 0 && elapsed_us > target_period_us) {
+      debug_deadline_miss_count_.fetch_add(1, std::memory_order_relaxed);
+    }
   }
 
   return controller_interface::return_type::OK;

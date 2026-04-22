@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string>
@@ -13,6 +14,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
+#include "sura_msgs/msg/controller_debug.hpp"
 #include "sura_msgs/msg/navigator.hpp"
 
 namespace cirtesub_controllers
@@ -75,12 +77,16 @@ private:
   void applyExternalSetpoint(const PoseStampedMsg & setpoint_msg);
   void publishCurrentSetpoint(const rclcpp::Time & stamp);
   void updateReferenceInterfacesFromSetpoint();
+  void resetDebugStats();
+  void publishDebugStats();
 
   rclcpp::Subscription<PoseStampedMsg>::SharedPtr setpoint_sub_;
   rclcpp::Subscription<TwistMsg>::SharedPtr feedforward_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
   rclcpp::Publisher<PoseStampedMsg>::SharedPtr setpoint_pub_;
+  rclcpp::Publisher<sura_msgs::msg::ControllerDebug>::SharedPtr debug_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<PoseStampedMsg>> setpoint_rt_pub_;
+  rclcpp::TimerBase::SharedPtr debug_timer_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<PoseStampedMsg>> setpoint_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> feedforward_buffer_;
@@ -94,6 +100,9 @@ private:
   std::string body_velocity_controller_name_;
   std::string setpoint_frame_id_;
   std::vector<std::string> reference_interface_names_;
+  bool debug_enabled_{false};
+  bool controller_active_{false};
+  bool chained_mode_{false};
 
   double kp_x_{0.0};
   double ki_x_{0.0};
@@ -142,6 +151,13 @@ private:
   bool feedforward_active_{false};
   std::atomic<bool> new_setpoint_requested_{false};
   std::atomic<int64_t> last_feedforward_time_ns_{0};
+  std::atomic<uint64_t> debug_desired_period_us_{0};
+  std::atomic<uint64_t> debug_cycle_count_{0};
+  std::atomic<uint64_t> debug_deadline_miss_count_{0};
+  std::atomic<uint64_t> debug_total_update_us_{0};
+  std::atomic<uint64_t> debug_last_update_us_{0};
+  std::atomic<uint64_t> debug_max_update_us_{0};
+  std::atomic<uint64_t> debug_min_update_us_{std::numeric_limits<uint64_t>::max()};
 };
 
 }  // namespace cirtesub_controllers

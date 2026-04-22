@@ -1,6 +1,7 @@
 #include "cirtesub_controllers/position_hold_controller.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -15,6 +16,50 @@
 
 namespace cirtesub_controllers
 {
+
+void PositionHoldController::resetDebugStats()
+{
+  debug_desired_period_us_.store(0, std::memory_order_relaxed);
+  debug_cycle_count_.store(0, std::memory_order_relaxed);
+  debug_deadline_miss_count_.store(0, std::memory_order_relaxed);
+  debug_total_update_us_.store(0, std::memory_order_relaxed);
+  debug_last_update_us_.store(0, std::memory_order_relaxed);
+  debug_max_update_us_.store(0, std::memory_order_relaxed);
+  debug_min_update_us_.store(
+    std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+}
+
+void PositionHoldController::publishDebugStats()
+{
+  if (!debug_enabled_ || !debug_pub_) {
+    return;
+  }
+
+  sura_msgs::msg::ControllerDebug msg;
+  const uint64_t cycle_count = debug_cycle_count_.load(std::memory_order_relaxed);
+  const uint64_t total_update_us = debug_total_update_us_.load(std::memory_order_relaxed);
+  const uint64_t min_update_us = debug_min_update_us_.load(std::memory_order_relaxed);
+
+  msg.header.stamp = get_node()->now();
+  msg.controller_name = get_node()->get_name();
+  msg.active = controller_active_;
+  msg.chained_mode = chained_mode_;
+  msg.desired_period_us =
+    static_cast<double>(debug_desired_period_us_.load(std::memory_order_relaxed));
+  msg.last_update_us =
+    static_cast<double>(debug_last_update_us_.load(std::memory_order_relaxed));
+  msg.avg_update_us =
+    cycle_count > 0 ? static_cast<double>(total_update_us) / static_cast<double>(cycle_count) : 0.0;
+  msg.max_update_us =
+    static_cast<double>(debug_max_update_us_.load(std::memory_order_relaxed));
+  msg.min_update_us = static_cast<double>(
+    min_update_us == std::numeric_limits<uint64_t>::max() ? 0ULL : min_update_us);
+  msg.deadline_miss_count =
+    debug_deadline_miss_count_.load(std::memory_order_relaxed);
+  msg.cycle_count = cycle_count;
+
+  debug_pub_->publish(msg);
+}
 
 controller_interface::CallbackReturn PositionHoldController::on_init()
 {
@@ -58,6 +103,7 @@ controller_interface::CallbackReturn PositionHoldController::on_init()
     auto_declare<double>("linear_feedforward_threshold", 1e-3);
     auto_declare<double>("angular_feedforward_threshold", 1e-3);
     auto_declare<double>("feedforward_timeout", 0.25);
+    auto_declare<bool>("debug.enabled", false);
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception in on_init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -101,6 +147,7 @@ controller_interface::CallbackReturn PositionHoldController::on_configure(
   body_velocity_controller_name_ =
     get_node()->get_parameter("body_velocity_controller_name").as_string();
   setpoint_frame_id_ = get_node()->get_parameter("setpoint_frame_id").as_string();
+  debug_enabled_ = get_node()->get_parameter("debug.enabled").as_bool();
 
   kp_x_ = get_node()->get_parameter("kp_x").as_double();
   ki_x_ = get_node()->get_parameter("ki_x").as_double();
@@ -175,6 +222,20 @@ controller_interface::CallbackReturn PositionHoldController::on_configure(
     rclcpp::SystemDefaultsQoS());
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<PoseStampedMsg>>(setpoint_pub_);
+  debug_pub_.reset();
+  debug_timer_.reset();
+  resetDebugStats();
+
+  if (debug_enabled_) {
+    debug_pub_ =
+      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller_debug", 10);
+    debug_timer_ = get_node()->create_wall_timer(
+      std::chrono::seconds(1),
+      [this]()
+      {
+        publishDebugStats();
+      });
+  }
 
   reference_interface_names_ = {
     "position.x",
@@ -203,8 +264,32 @@ controller_interface::CallbackReturn PositionHoldController::on_configure(
 controller_interface::CallbackReturn PositionHoldController::on_activate(
   const rclcpp_lifecycle::State &)
 {
+  controller_active_ = true;
   resetPidStates();
   current_setpoint_ = PoseStampedMsg{};
+  current_feedforward_ = TwistMsg{};
+  setpoint_initialized_ = false;
+  feedforward_active_ = false;
+  new_setpoint_requested_.store(false);
+  last_feedforward_time_ns_.store(0);
+  std::fill(
+    reference_interfaces_.begin(),
+    reference_interfaces_.end(),
+    std::numeric_limits<double>::quiet_NaN());
+  resetDebugStats();
+
+  for (auto & command_interface : command_interfaces_) {
+    command_interface.set_value(0.0);
+  }
+
+  return controller_interface::CallbackReturn::SUCCESS;
+}
+
+controller_interface::CallbackReturn PositionHoldController::on_deactivate(
+  const rclcpp_lifecycle::State &)
+{
+  controller_active_ = false;
+  resetPidStates();
   current_feedforward_ = TwistMsg{};
   setpoint_initialized_ = false;
   feedforward_active_ = false;
@@ -219,25 +304,8 @@ controller_interface::CallbackReturn PositionHoldController::on_activate(
     command_interface.set_value(0.0);
   }
 
-  return controller_interface::CallbackReturn::SUCCESS;
-}
-
-controller_interface::CallbackReturn PositionHoldController::on_deactivate(
-  const rclcpp_lifecycle::State &)
-{
-  resetPidStates();
-  current_feedforward_ = TwistMsg{};
-  setpoint_initialized_ = false;
-  feedforward_active_ = false;
-  new_setpoint_requested_.store(false);
-  last_feedforward_time_ns_.store(0);
-  std::fill(
-    reference_interfaces_.begin(),
-    reference_interfaces_.end(),
-    std::numeric_limits<double>::quiet_NaN());
-
-  for (auto & command_interface : command_interfaces_) {
-    command_interface.set_value(0.0);
+  if (debug_enabled_ && debug_pub_) {
+    publishDebugStats();
   }
 
   return controller_interface::CallbackReturn::SUCCESS;
@@ -435,6 +503,7 @@ PositionHoldController::on_export_reference_interfaces()
 
 bool PositionHoldController::on_set_chained_mode(bool chained_mode)
 {
+  chained_mode_ = chained_mode;
   if (chained_mode) {
     RCLCPP_INFO(get_node()->get_logger(), "PositionHoldController switched to chained mode");
   } else {
@@ -464,6 +533,8 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
   const rclcpp::Time & time,
   const rclcpp::Duration & period)
 {
+  const auto update_start = debug_enabled_ ? std::chrono::steady_clock::now() :
+    std::chrono::steady_clock::time_point{};
   auto navigator_msg = navigator_buffer_.readFromRT();
 
   if (!navigator_msg || !(*navigator_msg)) {
@@ -507,6 +578,7 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
 
   if (has_feedforward) {
     setSetpointFromNavigator(*(*navigator_msg));
+    publishCurrentSetpoint(time);
     resetPidStates();
   } else if (feedforward_active_) {
     setSetpointFromNavigator(*(*navigator_msg));
@@ -581,6 +653,36 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
   command_interfaces_[5].set_value(angular_z_command);
 
   feedforward_active_ = has_feedforward;
+
+  if (debug_enabled_) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - update_start).count();
+    const uint64_t elapsed_us = static_cast<uint64_t>(std::max<int64_t>(elapsed, 0));
+    const uint64_t target_period_us = static_cast<uint64_t>(
+      std::max<int64_t>(period.nanoseconds() / 1000, 0));
+    debug_desired_period_us_.store(target_period_us, std::memory_order_relaxed);
+    debug_cycle_count_.fetch_add(1, std::memory_order_relaxed);
+    debug_total_update_us_.fetch_add(elapsed_us, std::memory_order_relaxed);
+    debug_last_update_us_.store(elapsed_us, std::memory_order_relaxed);
+
+    uint64_t current_max = debug_max_update_us_.load(std::memory_order_relaxed);
+    while (elapsed_us > current_max &&
+      !debug_max_update_us_.compare_exchange_weak(
+        current_max, elapsed_us, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+
+    uint64_t current_min = debug_min_update_us_.load(std::memory_order_relaxed);
+    while (elapsed_us < current_min &&
+      !debug_min_update_us_.compare_exchange_weak(
+        current_min, elapsed_us, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+
+    if (target_period_us > 0 && elapsed_us > target_period_us) {
+      debug_deadline_miss_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
 
   return controller_interface::return_type::OK;
 }

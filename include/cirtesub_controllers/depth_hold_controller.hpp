@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string>
@@ -14,6 +15,7 @@
 #include "realtime_tools/realtime_publisher.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "sura_msgs/msg/auv_controller_set_point.hpp"
+#include "sura_msgs/msg/controller_debug.hpp"
 #include "sura_msgs/msg/navigator.hpp"
 
 namespace cirtesub_controllers
@@ -68,18 +70,23 @@ private:
     double kp,
     double ki,
     double kd,
+    double antiwindup,
     AxisPidState & state);
 
   static double wrapAngle(double angle);
   void publishSetpoint();
   void setRollPitchEnabled(bool enabled, bool request_zero_setpoint);
+  void resetDebugStats();
+  void publishDebugStats();
 
   rclcpp::Subscription<WrenchMsg>::SharedPtr feedforward_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
   rclcpp::Service<TriggerSrv>::SharedPtr enable_roll_pitch_srv_;
   rclcpp::Service<TriggerSrv>::SharedPtr disable_roll_pitch_srv_;
   rclcpp::Publisher<SetPointMsg>::SharedPtr setpoint_pub_;
+  rclcpp::Publisher<sura_msgs::msg::ControllerDebug>::SharedPtr debug_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<SetPointMsg>> setpoint_rt_pub_;
+  rclcpp::TimerBase::SharedPtr debug_timer_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> feedforward_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
@@ -94,22 +101,29 @@ private:
   std::string disable_roll_pitch_service_name_;
   std::string body_force_controller_name_;
   std::vector<std::string> reference_interface_names_;
+  bool debug_enabled_{false};
+  bool controller_active_{false};
+  bool chained_mode_{false};
 
   double kp_roll_{0.0};
   double ki_roll_{0.0};
   double kd_roll_{0.0};
+  double antiwindup_roll_{0.0};
 
   double kp_pitch_{0.0};
   double ki_pitch_{0.0};
   double kd_pitch_{0.0};
+  double antiwindup_pitch_{0.0};
 
   double kp_yaw_{0.0};
   double ki_yaw_{0.0};
   double kd_yaw_{0.0};
+  double antiwindup_yaw_{0.0};
 
   double kp_depth_{0.0};
   double ki_depth_{0.0};
   double kd_depth_{0.0};
+  double antiwindup_depth_{0.0};
 
   bool allow_roll_pitch_{false};
   double feedforward_gain_x_{1.0};
@@ -139,6 +153,13 @@ private:
   AxisPidState yaw_pid_;
   AxisPidState depth_pid_;
   bool first_update_{true};
+  std::atomic<uint64_t> debug_desired_period_us_{0};
+  std::atomic<uint64_t> debug_cycle_count_{0};
+  std::atomic<uint64_t> debug_deadline_miss_count_{0};
+  std::atomic<uint64_t> debug_total_update_us_{0};
+  std::atomic<uint64_t> debug_last_update_us_{0};
+  std::atomic<uint64_t> debug_max_update_us_{0};
+  std::atomic<uint64_t> debug_min_update_us_{std::numeric_limits<uint64_t>::max()};
 };
 
 }  // namespace cirtesub_controllers

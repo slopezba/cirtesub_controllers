@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <limits>
 #include <string>
@@ -12,6 +14,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
+#include "sura_msgs/msg/controller_debug.hpp"
 #include "sura_msgs/msg/navigator.hpp"
 
 namespace cirtesub_controllers
@@ -69,11 +72,15 @@ private:
     AxisPidState & state);
 
   void logGains(const std::string & context) const;
+  void resetDebugStats();
+  void publishDebugStats();
 
   rclcpp::Subscription<TwistMsg>::SharedPtr setpoint_sub_;
   rclcpp::Subscription<NavigatorMsg>::SharedPtr navigator_sub_;
   rclcpp::Publisher<WrenchMsg>::SharedPtr feedforward_pub_;
+  rclcpp::Publisher<sura_msgs::msg::ControllerDebug>::SharedPtr debug_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<WrenchMsg>> feedforward_rt_pub_;
+  rclcpp::TimerBase::SharedPtr debug_timer_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<TwistMsg>> setpoint_buffer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<NavigatorMsg>> navigator_buffer_;
@@ -85,6 +92,9 @@ private:
   std::string feedforward_topic_;
   std::string body_force_controller_name_;
   std::vector<std::string> reference_interface_names_;
+  bool debug_enabled_{false};
+  bool controller_active_{false};
+  bool chained_mode_{false};
 
   double kp_x_{0.0};
   double ki_x_{0.0};
@@ -122,6 +132,14 @@ private:
   AxisPidState roll_pid_;
   AxisPidState pitch_pid_;
   AxisPidState yaw_pid_;
+
+  std::atomic<uint64_t> debug_desired_period_us_{0};
+  std::atomic<uint64_t> debug_cycle_count_{0};
+  std::atomic<uint64_t> debug_deadline_miss_count_{0};
+  std::atomic<uint64_t> debug_total_update_us_{0};
+  std::atomic<uint64_t> debug_last_update_us_{0};
+  std::atomic<uint64_t> debug_max_update_us_{0};
+  std::atomic<uint64_t> debug_min_update_us_{std::numeric_limits<uint64_t>::max()};
 };
 
 }  // namespace cirtesub_controllers

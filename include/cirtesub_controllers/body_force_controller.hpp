@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -12,6 +15,7 @@
 #include "hardware_interface/loaned_command_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
+#include "sura_msgs/msg/controller_debug.hpp"
 #include "urdf/model.h"
 
 namespace cirtesub_controllers
@@ -46,6 +50,11 @@ protected:
     const rclcpp::Duration & period) override;
 
 private:
+  using BodyWrenchVector = Eigen::Matrix<double, 6, 1>;
+  using ThrusterAllocationMatrix = Eigen::Matrix<double, 6, Eigen::Dynamic>;
+  using ThrusterAllocationPseudoInverse = Eigen::Matrix<double, Eigen::Dynamic, 6>;
+  using ThrusterForceVector = Eigen::Matrix<double, Eigen::Dynamic, 1>;
+
   static Eigen::Isometry3d urdfPoseToEigen(const urdf::Pose & pose);
 
   std::vector<std::string> extractThrusterJointsFromRos2Control(
@@ -69,18 +78,37 @@ private:
     const Eigen::MatrixXd & matrix,
     double tolerance = 1e-6) const;
 
+  void resetDebugStats();
+  void publishDebugStats();
+
   using WrenchMsg = geometry_msgs::msg::Wrench;
+  using DebugMsg = sura_msgs::msg::ControllerDebug;
 
   rclcpp::Subscription<WrenchMsg>::SharedPtr body_force_sub_;
+  rclcpp::Publisher<DebugMsg>::SharedPtr debug_pub_;
+  rclcpp::TimerBase::SharedPtr debug_timer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> rt_buffer_ptr_;
 
   std::string input_topic_;
   std::string base_link_;
   std::vector<std::string> thruster_joints_;
+  bool debug_enabled_{false};
+  bool controller_active_{false};
+  bool chained_mode_{false};
 
   std::vector<std::string> reference_interface_names_;
 
-  Eigen::MatrixXd thruster_allocation_matrix_;
+  ThrusterAllocationMatrix thruster_allocation_matrix_;
+  ThrusterAllocationPseudoInverse thruster_allocation_matrix_pinv_;
+  ThrusterForceVector thruster_forces_;
+
+  std::atomic<uint64_t> debug_desired_period_us_{0};
+  std::atomic<uint64_t> debug_cycle_count_{0};
+  std::atomic<uint64_t> debug_deadline_miss_count_{0};
+  std::atomic<uint64_t> debug_total_update_us_{0};
+  std::atomic<uint64_t> debug_last_update_us_{0};
+  std::atomic<uint64_t> debug_max_update_us_{0};
+  std::atomic<uint64_t> debug_min_update_us_{std::numeric_limits<uint64_t>::max()};
 };
 
 }  // namespace cirtesub_controllers
