@@ -60,13 +60,13 @@ controller_interface::CallbackReturn BodyVelocityController::on_init()
 {
   try {
     auto_declare<std::string>(
-      "setpoint_topic", "/body_velocity_controller/setpoint");
+      "setpoint_topic", "/cirtesub/controller/body_velocity/setpoint");
     auto_declare<std::string>(
       "navigator_topic", "/cirtesub/navigator/navigation");
     auto_declare<std::string>(
-      "feedforward_topic", "/stabilize_controller/feedforward");
+      "feedforward_topic", "/cirtesub/controller/stabilize/feedforward");
     auto_declare<std::string>(
-      "body_force_controller_name", "body_force_controller");
+      "body_force_controller_name", "body_force");
 
     auto_declare<double>("kp_x", 0.0);
     auto_declare<double>("ki_x", 0.0);
@@ -189,7 +189,7 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
 
   if (debug_enabled_) {
     debug_pub_ =
-      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller_debug", 10);
+      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller/debug", 10);
     debug_timer_ = get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()

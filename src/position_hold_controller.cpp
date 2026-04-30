@@ -64,10 +64,10 @@ void PositionHoldController::publishDebugStats()
 controller_interface::CallbackReturn PositionHoldController::on_init()
 {
   try {
-    auto_declare<std::string>("setpoint_topic", "/position_hold_controller/setpoint");
-    auto_declare<std::string>("feedforward_topic", "/position_hold_controller/feedforward");
+    auto_declare<std::string>("setpoint_topic", "/cirtesub/controller/position_hold/setpoint");
+    auto_declare<std::string>("feedforward_topic", "/cirtesub/controller/position_hold/feedforward");
     auto_declare<std::string>("navigator_topic", "/cirtesub/navigator/navigation");
-    auto_declare<std::string>("body_velocity_controller_name", "body_velocity_controller");
+    auto_declare<std::string>("body_velocity_controller_name", "body_velocity");
     auto_declare<std::string>("setpoint_frame_id", "world_ned");
 
     auto_declare<double>("kp_x", 0.0);
@@ -228,7 +228,7 @@ controller_interface::CallbackReturn PositionHoldController::on_configure(
 
   if (debug_enabled_) {
     debug_pub_ =
-      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller_debug", 10);
+      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller/debug", 10);
     debug_timer_ = get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()

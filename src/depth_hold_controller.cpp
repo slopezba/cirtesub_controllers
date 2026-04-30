@@ -63,17 +63,17 @@ controller_interface::CallbackReturn DepthHoldController::on_init()
 {
   try {
     auto_declare<std::string>(
-      "feedforward_topic", "depth_hold_controller/feedforward");
+      "feedforward_topic", "/cirtesub/controller/depth_hold/feedforward");
     auto_declare<std::string>(
       "navigator_topic", "/cirtesub/navigator/navigation");
     auto_declare<std::string>(
-      "setpoint_topic", "depth_hold_controller/set_point");
+      "setpoint_topic", "/cirtesub/controller/depth_hold/set_point");
     auto_declare<std::string>(
-      "enable_roll_pitch_service_name", "depth_hold_controller/enable_roll_pitch");
+      "enable_roll_pitch_service_name", "/cirtesub/controller/depth_hold/enable_roll_pitch");
     auto_declare<std::string>(
-      "disable_roll_pitch_service_name", "depth_hold_controller/disable_roll_pitch");
+      "disable_roll_pitch_service_name", "/cirtesub/controller/depth_hold/disable_roll_pitch");
     auto_declare<std::string>(
-      "body_force_controller_name", "body_force_controller");
+      "body_force_controller_name", "body_force");
 
     auto_declare<bool>("allow_roll_pitch", false);
     auto_declare<double>("feedforward_gain_x", 1.0);
@@ -233,7 +233,7 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
 
   if (debug_enabled_) {
     debug_pub_ =
-      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller_debug", 10);
+      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller/debug", 10);
     debug_timer_ = get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()

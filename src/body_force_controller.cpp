@@ -259,7 +259,7 @@ void BodyForceController::publishDebugStats()
 controller_interface::CallbackReturn BodyForceController::on_init()
 {
   try {
-    auto_declare<std::string>("input_topic", "/body_force/command");
+    auto_declare<std::string>("input_topic", "/cirtesub/controller/body_force/command");
     auto_declare<std::string>("base_link", "base_link");
     auto_declare<bool>("debug.enabled", false);
   } catch (const std::exception & e) {
@@ -355,7 +355,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   resetDebugStats();
 
   if (debug_enabled_) {
-    debug_pub_ = this->get_node()->create_publisher<DebugMsg>("/cirtesub/controller_debug", 10);
+    debug_pub_ = this->get_node()->create_publisher<DebugMsg>("/cirtesub/controller/debug", 10);
     debug_timer_ = this->get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()
@@ -365,7 +365,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
 
     RCLCPP_INFO(
       get_node()->get_logger(),
-      "Debug profiling enabled. Publishing ControllerDebug messages to '/cirtesub/controller_debug'.");
+      "Debug profiling enabled. Publishing ControllerDebug messages to '/cirtesub/controller/debug'.");
   }
 
   reference_interface_names_ = {
