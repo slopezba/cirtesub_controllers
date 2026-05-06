@@ -222,6 +222,17 @@ controller_interface::CallbackReturn PositionHoldController::on_configure(
     rclcpp::SystemDefaultsQoS());
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<PoseStampedMsg>>(setpoint_pub_);
+  output_pub_ = get_node()->create_publisher<TwistMsg>(
+    "/cirtesub/controller/position_hold/output",
+    rclcpp::SystemDefaultsQoS());
+  output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<TwistMsg>>(output_pub_);
+  pid_terms_pub_ = get_node()->create_publisher<Float64MultiArrayMsg>(
+    "/cirtesub/controller/position_hold/pid_terms",
+    rclcpp::SystemDefaultsQoS());
+  pid_terms_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(pid_terms_pub_);
+  pid_terms_rt_pub_->msg_.data.resize(18, 0.0);
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -409,6 +420,31 @@ double PositionHoldController::computePid(
   return (kp * error) + (ki * state.integral) + (kd * derivative);
 }
 
+PositionHoldController::PidTerms PositionHoldController::computePidTerms(
+  double error,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  const double safe_dt = dt > 0.0 ? dt : 1e-6;
+  state.integral += error * safe_dt;
+
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  const double derivative = (error - state.previous_error) / safe_dt;
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * derivative};
+}
+
 double PositionHoldController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
@@ -455,6 +491,37 @@ void PositionHoldController::publishCurrentSetpoint(const rclcpp::Time & stamp)
     current_setpoint_.header.stamp = stamp;
     setpoint_rt_pub_->msg_ = current_setpoint_;
     setpoint_rt_pub_->unlockAndPublish();
+  }
+}
+
+void PositionHoldController::publishTelemetry(
+  double linear_x,
+  double linear_y,
+  double linear_z,
+  double angular_x,
+  double angular_y,
+  double angular_z,
+  const std::array<PidTerms, 6> & pid_terms)
+{
+  if (output_rt_pub_ && output_rt_pub_->trylock()) {
+    output_rt_pub_->msg_.linear.x = linear_x;
+    output_rt_pub_->msg_.linear.y = linear_y;
+    output_rt_pub_->msg_.linear.z = linear_z;
+    output_rt_pub_->msg_.angular.x = angular_x;
+    output_rt_pub_->msg_.angular.y = angular_y;
+    output_rt_pub_->msg_.angular.z = angular_z;
+    output_rt_pub_->unlockAndPublish();
+  }
+
+  if (pid_terms_rt_pub_ && pid_terms_rt_pub_->trylock()) {
+    auto & data = pid_terms_rt_pub_->msg_.data;
+    for (size_t axis = 0; axis < pid_terms.size(); ++axis) {
+      const size_t offset = axis * 3;
+      data[offset] = pid_terms[axis].proportional;
+      data[offset + 1] = pid_terms[axis].integral;
+      data[offset + 2] = pid_terms[axis].derivative;
+    }
+    pid_terms_rt_pub_->unlockAndPublish();
   }
 }
 
@@ -626,24 +693,38 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
 
   const double dt = period.seconds();
 
+  std::array<PidTerms, 6> pid_terms;
+  pid_terms[0] = computePidTerms(
+    position_error_body.x(), dt, kp_x_, ki_x_, kd_x_, antiwindup_x_, x_pid_);
+  pid_terms[1] = computePidTerms(
+    position_error_body.y(), dt, kp_y_, ki_y_, kd_y_, antiwindup_y_, y_pid_);
+  pid_terms[2] = computePidTerms(
+    position_error_body.z(), dt, kp_z_, ki_z_, kd_z_, antiwindup_z_, z_pid_);
+  pid_terms[3] = computePidTerms(
+    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[4] = computePidTerms(
+    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+  pid_terms[5] = computePidTerms(
+    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+
   const double linear_x_command =
     effective_feedforward.linear.x +
-    computePid(position_error_body.x(), dt, kp_x_, ki_x_, kd_x_, antiwindup_x_, x_pid_);
+    pid_terms[0].proportional + pid_terms[0].integral + pid_terms[0].derivative;
   const double linear_y_command =
     effective_feedforward.linear.y +
-    computePid(position_error_body.y(), dt, kp_y_, ki_y_, kd_y_, antiwindup_y_, y_pid_);
+    pid_terms[1].proportional + pid_terms[1].integral + pid_terms[1].derivative;
   const double linear_z_command =
     effective_feedforward.linear.z +
-    computePid(position_error_body.z(), dt, kp_z_, ki_z_, kd_z_, antiwindup_z_, z_pid_);
+    pid_terms[2].proportional + pid_terms[2].integral + pid_terms[2].derivative;
   const double angular_x_command =
     effective_feedforward.angular.x +
-    computePid(roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+    pid_terms[3].proportional + pid_terms[3].integral + pid_terms[3].derivative;
   const double angular_y_command =
     effective_feedforward.angular.y +
-    computePid(pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+    pid_terms[4].proportional + pid_terms[4].integral + pid_terms[4].derivative;
   const double angular_z_command =
     effective_feedforward.angular.z +
-    computePid(yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+    pid_terms[5].proportional + pid_terms[5].integral + pid_terms[5].derivative;
 
   command_interfaces_[0].set_value(linear_x_command);
   command_interfaces_[1].set_value(linear_y_command);
@@ -651,6 +732,15 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
   command_interfaces_[3].set_value(angular_x_command);
   command_interfaces_[4].set_value(angular_y_command);
   command_interfaces_[5].set_value(angular_z_command);
+
+  publishTelemetry(
+    linear_x_command,
+    linear_y_command,
+    linear_z_command,
+    angular_x_command,
+    angular_y_command,
+    angular_z_command,
+    pid_terms);
 
   feedforward_active_ = has_feedforward;
 

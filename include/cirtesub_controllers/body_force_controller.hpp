@@ -15,6 +15,8 @@
 #include "hardware_interface/loaned_command_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
+#include "realtime_tools/realtime_publisher.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "sura_msgs/msg/controller_debug.hpp"
 #include "urdf/model.h"
 
@@ -82,10 +84,13 @@ private:
   void publishDebugStats();
 
   using WrenchMsg = geometry_msgs::msg::Wrench;
+  using Float64MultiArrayMsg = std_msgs::msg::Float64MultiArray;
   using DebugMsg = sura_msgs::msg::ControllerDebug;
 
   rclcpp::Subscription<WrenchMsg>::SharedPtr body_force_sub_;
+  rclcpp::Publisher<Float64MultiArrayMsg>::SharedPtr output_pub_;
   rclcpp::Publisher<DebugMsg>::SharedPtr debug_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>> output_rt_pub_;
   rclcpp::TimerBase::SharedPtr debug_timer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> rt_buffer_ptr_;
 

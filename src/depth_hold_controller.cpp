@@ -227,6 +227,17 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
     rclcpp::SystemDefaultsQoS());
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<SetPointMsg>>(setpoint_pub_);
+  output_pub_ = get_node()->create_publisher<WrenchMsg>(
+    "/cirtesub/controller/depth_hold/output",
+    rclcpp::SystemDefaultsQoS());
+  output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(output_pub_);
+  pid_terms_pub_ = get_node()->create_publisher<Float64MultiArrayMsg>(
+    "/cirtesub/controller/depth_hold/pid_terms",
+    rclcpp::SystemDefaultsQoS());
+  pid_terms_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(pid_terms_pub_);
+  pid_terms_rt_pub_->msg_.data.resize(12, 0.0);
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -498,6 +509,33 @@ double DepthHoldController::computePid(
   return kp * error + ki * state.integral + kd * derivative;
 }
 
+DepthHoldController::PidTerms DepthHoldController::computePidTerms(
+  double error,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  double derivative = 0.0;
+  if (!first_update_ && dt > 0.0) {
+    derivative = (error - state.previous_error) / dt;
+  }
+
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * derivative};
+}
+
 double DepthHoldController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
@@ -522,6 +560,37 @@ void DepthHoldController::publishSetpoint()
     setpoint_rt_pub_->msg_.rpy.y = pitch_setpoint_;
     setpoint_rt_pub_->msg_.rpy.z = yaw_setpoint_;
     setpoint_rt_pub_->unlockAndPublish();
+  }
+}
+
+void DepthHoldController::publishTelemetry(
+  double force_x,
+  double force_y,
+  double force_z,
+  double torque_x,
+  double torque_y,
+  double torque_z,
+  const std::array<PidTerms, 4> & pid_terms)
+{
+  if (output_rt_pub_ && output_rt_pub_->trylock()) {
+    output_rt_pub_->msg_.force.x = force_x;
+    output_rt_pub_->msg_.force.y = force_y;
+    output_rt_pub_->msg_.force.z = force_z;
+    output_rt_pub_->msg_.torque.x = torque_x;
+    output_rt_pub_->msg_.torque.y = torque_y;
+    output_rt_pub_->msg_.torque.z = torque_z;
+    output_rt_pub_->unlockAndPublish();
+  }
+
+  if (pid_terms_rt_pub_ && pid_terms_rt_pub_->trylock()) {
+    auto & data = pid_terms_rt_pub_->msg_.data;
+    for (size_t axis = 0; axis < pid_terms.size(); ++axis) {
+      const size_t offset = axis * 3;
+      data[offset] = pid_terms[axis].proportional;
+      data[offset + 1] = pid_terms[axis].integral;
+      data[offset + 2] = pid_terms[axis].derivative;
+    }
+    pid_terms_rt_pub_->unlockAndPublish();
   }
 }
 
@@ -698,21 +767,31 @@ controller_interface::return_type DepthHoldController::update_and_write_commands
   const double yaw_error = wrapAngle(yaw_setpoint_ - yaw);
   const double depth_error = depth_setpoint_ - depth;
 
+  std::array<PidTerms, 4> pid_terms;
+  pid_terms[0] = computePidTerms(
+    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[1] = computePidTerms(
+    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+  pid_terms[2] = computePidTerms(
+    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+  pid_terms[3] = computePidTerms(
+    depth_error, dt, kp_depth_, ki_depth_, kd_depth_, antiwindup_depth_, depth_pid_);
+
   const double force_z =
     force_ff_z +
-    computePid(depth_error, dt, kp_depth_, ki_depth_, kd_depth_, antiwindup_depth_, depth_pid_);
+    pid_terms[3].proportional + pid_terms[3].integral + pid_terms[3].derivative;
 
   const double torque_x =
     torque_ff_x +
-    computePid(roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+    pid_terms[0].proportional + pid_terms[0].integral + pid_terms[0].derivative;
 
   const double torque_y =
     torque_ff_y +
-    computePid(pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+    pid_terms[1].proportional + pid_terms[1].integral + pid_terms[1].derivative;
 
   const double torque_z =
     yaw_feedforward +
-    computePid(yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+    pid_terms[2].proportional + pid_terms[2].integral + pid_terms[2].derivative;
 
   command_interfaces_[0].set_value(force_x);
   command_interfaces_[1].set_value(force_y);
@@ -720,6 +799,8 @@ controller_interface::return_type DepthHoldController::update_and_write_commands
   command_interfaces_[3].set_value(torque_x);
   command_interfaces_[4].set_value(torque_y);
   command_interfaces_[5].set_value(torque_z);
+
+  publishTelemetry(force_x, force_y, force_z, torque_x, torque_y, torque_z, pid_terms);
 
   roll_feedforward_active_ = allow_roll_pitch && has_roll_feedforward;
   pitch_feedforward_active_ = allow_roll_pitch && has_pitch_feedforward;

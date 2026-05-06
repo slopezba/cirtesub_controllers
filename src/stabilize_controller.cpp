@@ -220,6 +220,17 @@ controller_interface::CallbackReturn StabilizeController::on_configure(
     rclcpp::SystemDefaultsQoS());
   setpoint_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<Vector3Msg>>(setpoint_pub_);
+  output_pub_ = get_node()->create_publisher<WrenchMsg>(
+    "/cirtesub/controller/stabilize/output",
+    rclcpp::SystemDefaultsQoS());
+  output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(output_pub_);
+  pid_terms_pub_ = get_node()->create_publisher<Float64MultiArrayMsg>(
+    "/cirtesub/controller/stabilize/pid_terms",
+    rclcpp::SystemDefaultsQoS());
+  pid_terms_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(pid_terms_pub_);
+  pid_terms_rt_pub_->msg_.data.resize(9, 0.0);
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -470,6 +481,33 @@ double StabilizeController::computePid(
   return kp * error + ki * state.integral + kd * derivative;
 }
 
+StabilizeController::PidTerms StabilizeController::computePidTerms(
+  double error,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  double derivative = 0.0;
+  if (!first_update_ && dt > 0.0) {
+    derivative = (error - state.previous_error) / dt;
+  }
+
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * derivative};
+}
+
 double StabilizeController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
@@ -491,6 +529,37 @@ void StabilizeController::publishSetpoint()
     setpoint_rt_pub_->msg_.y = pitch_setpoint_;
     setpoint_rt_pub_->msg_.z = yaw_setpoint_;
     setpoint_rt_pub_->unlockAndPublish();
+  }
+}
+
+void StabilizeController::publishTelemetry(
+  double force_x,
+  double force_y,
+  double force_z,
+  double torque_x,
+  double torque_y,
+  double torque_z,
+  const std::array<PidTerms, 3> & pid_terms)
+{
+  if (output_rt_pub_ && output_rt_pub_->trylock()) {
+    output_rt_pub_->msg_.force.x = force_x;
+    output_rt_pub_->msg_.force.y = force_y;
+    output_rt_pub_->msg_.force.z = force_z;
+    output_rt_pub_->msg_.torque.x = torque_x;
+    output_rt_pub_->msg_.torque.y = torque_y;
+    output_rt_pub_->msg_.torque.z = torque_z;
+    output_rt_pub_->unlockAndPublish();
+  }
+
+  if (pid_terms_rt_pub_ && pid_terms_rt_pub_->trylock()) {
+    auto & data = pid_terms_rt_pub_->msg_.data;
+    for (size_t axis = 0; axis < pid_terms.size(); ++axis) {
+      const size_t offset = axis * 3;
+      data[offset] = pid_terms[axis].proportional;
+      data[offset + 1] = pid_terms[axis].integral;
+      data[offset + 2] = pid_terms[axis].derivative;
+    }
+    pid_terms_rt_pub_->unlockAndPublish();
   }
 }
 
@@ -653,17 +722,25 @@ controller_interface::return_type StabilizeController::update_and_write_commands
   const double pitch_error = wrapAngle(pitch_setpoint_ - pitch);
   const double yaw_error = wrapAngle(yaw_setpoint_ - yaw);
 
+  std::array<PidTerms, 3> pid_terms;
+  pid_terms[0] = computePidTerms(
+    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[1] = computePidTerms(
+    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+  pid_terms[2] = computePidTerms(
+    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+
   const double torque_x =
     torque_ff_x +
-    computePid(roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+    pid_terms[0].proportional + pid_terms[0].integral + pid_terms[0].derivative;
 
   const double torque_y =
     torque_ff_y +
-    computePid(pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
+    pid_terms[1].proportional + pid_terms[1].integral + pid_terms[1].derivative;
 
   const double torque_z =
     yaw_feedforward +
-    computePid(yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+    pid_terms[2].proportional + pid_terms[2].integral + pid_terms[2].derivative;
 
   command_interfaces_[0].set_value(force_x);
   command_interfaces_[1].set_value(force_y);
@@ -671,6 +748,8 @@ controller_interface::return_type StabilizeController::update_and_write_commands
   command_interfaces_[3].set_value(torque_x);
   command_interfaces_[4].set_value(torque_y);
   command_interfaces_[5].set_value(torque_z);
+
+  publishTelemetry(force_x, force_y, force_z, torque_x, torque_y, torque_z, pid_terms);
 
   roll_feedforward_active_ = allow_roll_pitch && has_roll_feedforward;
   pitch_feedforward_active_ = allow_roll_pitch && has_pitch_feedforward;

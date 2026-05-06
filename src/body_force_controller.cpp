@@ -350,6 +350,12 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
       rt_buffer_ptr_.writeFromNonRT(msg);
     });
 
+  output_pub_ = this->get_node()->create_publisher<Float64MultiArrayMsg>(
+    "/cirtesub/controller/body_force/output",
+    rclcpp::SystemDefaultsQoS());
+  output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(output_pub_);
+  output_rt_pub_->msg_.data.resize(thruster_joints_.size(), 0.0);
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -498,6 +504,14 @@ controller_interface::return_type BodyForceController::update_and_write_commands
 
   for (int i = 0; i < thruster_forces_.size(); ++i) {
     command_interfaces_[i].set_value(thruster_forces_(i));
+  }
+
+  if (output_rt_pub_ && output_rt_pub_->trylock()) {
+    auto & data = output_rt_pub_->msg_.data;
+    for (int i = 0; i < thruster_forces_.size(); ++i) {
+      data[static_cast<size_t>(i)] = thruster_forces_(i);
+    }
+    output_rt_pub_->unlockAndPublish();
   }
 
   if (debug_enabled_) {

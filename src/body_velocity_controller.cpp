@@ -183,6 +183,17 @@ controller_interface::CallbackReturn BodyVelocityController::on_configure(
     rclcpp::SystemDefaultsQoS());
   feedforward_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(feedforward_pub_);
+  output_pub_ = get_node()->create_publisher<WrenchMsg>(
+    "/cirtesub/controller/body_velocity/output",
+    rclcpp::SystemDefaultsQoS());
+  output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(output_pub_);
+  pid_terms_pub_ = get_node()->create_publisher<Float64MultiArrayMsg>(
+    "/cirtesub/controller/body_velocity/pid_terms",
+    rclcpp::SystemDefaultsQoS());
+  pid_terms_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(pid_terms_pub_);
+  pid_terms_rt_pub_->msg_.data.resize(18, 0.0);
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -367,6 +378,59 @@ double BodyVelocityController::computePid(
   return kp * error + ki * state.integral + kd * derivative;
 }
 
+BodyVelocityController::PidTerms BodyVelocityController::computePidTerms(
+  double error,
+  double measured_acceleration,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  const double derivative = -measured_acceleration;
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * derivative};
+}
+
+void BodyVelocityController::publishTelemetry(
+  double force_x,
+  double force_y,
+  double force_z,
+  double torque_x,
+  double torque_y,
+  double torque_z,
+  const std::array<PidTerms, 6> & pid_terms)
+{
+  if (output_rt_pub_ && output_rt_pub_->trylock()) {
+    output_rt_pub_->msg_.force.x = force_x;
+    output_rt_pub_->msg_.force.y = force_y;
+    output_rt_pub_->msg_.force.z = force_z;
+    output_rt_pub_->msg_.torque.x = torque_x;
+    output_rt_pub_->msg_.torque.y = torque_y;
+    output_rt_pub_->msg_.torque.z = torque_z;
+    output_rt_pub_->unlockAndPublish();
+  }
+
+  if (pid_terms_rt_pub_ && pid_terms_rt_pub_->trylock()) {
+    auto & data = pid_terms_rt_pub_->msg_.data;
+    for (size_t axis = 0; axis < pid_terms.size(); ++axis) {
+      const size_t offset = axis * 3;
+      data[offset] = pid_terms[axis].proportional;
+      data[offset + 1] = pid_terms[axis].integral;
+      data[offset + 2] = pid_terms[axis].derivative;
+    }
+    pid_terms_rt_pub_->unlockAndPublish();
+  }
+}
+
 void BodyVelocityController::logGains(const std::string & context) const
 {
   RCLCPP_INFO(
@@ -477,7 +541,9 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
   const double setpoint_angular_z =
     std::isnan(reference_interfaces_[5]) ? 0.0 : reference_interfaces_[5];
 
-  const double force_x = computePid(
+  std::array<PidTerms, 6> pid_terms;
+
+  pid_terms[0] = computePidTerms(
     setpoint_linear_x - (*navigator_msg)->body_velocity.linear.x,
     (*navigator_msg)->body_acceleration.linear.x,
     dt,
@@ -486,8 +552,10 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_x_,
     antiwindup_x_,
     x_pid_);
+  const double force_x =
+    pid_terms[0].proportional + pid_terms[0].integral + pid_terms[0].derivative;
 
-  const double force_y = computePid(
+  pid_terms[1] = computePidTerms(
     setpoint_linear_y - (*navigator_msg)->body_velocity.linear.y,
     (*navigator_msg)->body_acceleration.linear.y,
     dt,
@@ -496,8 +564,10 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_y_,
     antiwindup_y_,
     y_pid_);
+  const double force_y =
+    pid_terms[1].proportional + pid_terms[1].integral + pid_terms[1].derivative;
 
-  const double force_z = computePid(
+  pid_terms[2] = computePidTerms(
     setpoint_linear_z - (*navigator_msg)->body_velocity.linear.z,
     (*navigator_msg)->body_acceleration.linear.z,
     dt,
@@ -506,8 +576,10 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_z_,
     antiwindup_z_,
     z_pid_);
+  const double force_z =
+    pid_terms[2].proportional + pid_terms[2].integral + pid_terms[2].derivative;
 
-  const double torque_x = computePid(
+  pid_terms[3] = computePidTerms(
     setpoint_angular_x - (*navigator_msg)->body_velocity.angular.x,
     (*navigator_msg)->body_acceleration.angular.x,
     dt,
@@ -516,8 +588,10 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_roll_,
     antiwindup_roll_,
     roll_pid_);
+  const double torque_x =
+    pid_terms[3].proportional + pid_terms[3].integral + pid_terms[3].derivative;
 
-  const double torque_y = computePid(
+  pid_terms[4] = computePidTerms(
     setpoint_angular_y - (*navigator_msg)->body_velocity.angular.y,
     (*navigator_msg)->body_acceleration.angular.y,
     dt,
@@ -526,8 +600,10 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_pitch_,
     antiwindup_pitch_,
     pitch_pid_);
+  const double torque_y =
+    pid_terms[4].proportional + pid_terms[4].integral + pid_terms[4].derivative;
 
-  const double torque_z = computePid(
+  pid_terms[5] = computePidTerms(
     setpoint_angular_z - (*navigator_msg)->body_velocity.angular.z,
     (*navigator_msg)->body_acceleration.angular.z,
     dt,
@@ -536,6 +612,8 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     kd_yaw_,
     antiwindup_yaw_,
     yaw_pid_);
+  const double torque_z =
+    pid_terms[5].proportional + pid_terms[5].integral + pid_terms[5].derivative;
 
   if (feedforward_rt_pub_ && feedforward_rt_pub_->trylock()) {
     feedforward_rt_pub_->msg_.force.x = force_x;
@@ -546,6 +624,8 @@ controller_interface::return_type BodyVelocityController::update_and_write_comma
     feedforward_rt_pub_->msg_.torque.z = torque_z;
     feedforward_rt_pub_->unlockAndPublish();
   }
+
+  publishTelemetry(force_x, force_y, force_z, torque_x, torque_y, torque_z, pid_terms);
 
   if (debug_enabled_) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(

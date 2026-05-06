@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <memory>
@@ -15,6 +16,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "realtime_tools/realtime_buffer.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "sura_msgs/msg/controller_debug.hpp"
 #include "sura_msgs/msg/navigator.hpp"
@@ -53,6 +55,7 @@ protected:
 private:
   using WrenchMsg = geometry_msgs::msg::Wrench;
   using Vector3Msg = geometry_msgs::msg::Vector3;
+  using Float64MultiArrayMsg = std_msgs::msg::Float64MultiArray;
   using NavigatorMsg = sura_msgs::msg::Navigator;
   using TriggerSrv = std_srvs::srv::Trigger;
 
@@ -60,6 +63,13 @@ private:
   {
     double integral{0.0};
     double previous_error{0.0};
+  };
+
+  struct PidTerms
+  {
+    double proportional{0.0};
+    double integral{0.0};
+    double derivative{0.0};
   };
 
   rcl_interfaces::msg::SetParametersResult parametersCallback(
@@ -74,8 +84,25 @@ private:
     double antiwindup,
     AxisPidState & state);
 
+  PidTerms computePidTerms(
+    double error,
+    double dt,
+    double kp,
+    double ki,
+    double kd,
+    double antiwindup,
+    AxisPidState & state);
+
   static double wrapAngle(double angle);
   void publishSetpoint();
+  void publishTelemetry(
+    double force_x,
+    double force_y,
+    double force_z,
+    double torque_x,
+    double torque_y,
+    double torque_z,
+    const std::array<PidTerms, 3> & pid_terms);
   void setRollPitchEnabled(bool enabled, bool request_zero_setpoint);
   void resetDebugStats();
   void publishDebugStats();
@@ -85,8 +112,12 @@ private:
   rclcpp::Service<TriggerSrv>::SharedPtr enable_roll_pitch_srv_;
   rclcpp::Service<TriggerSrv>::SharedPtr disable_roll_pitch_srv_;
   rclcpp::Publisher<Vector3Msg>::SharedPtr setpoint_pub_;
+  rclcpp::Publisher<WrenchMsg>::SharedPtr output_pub_;
+  rclcpp::Publisher<Float64MultiArrayMsg>::SharedPtr pid_terms_pub_;
   rclcpp::Publisher<sura_msgs::msg::ControllerDebug>::SharedPtr debug_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<Vector3Msg>> setpoint_rt_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<WrenchMsg>> output_rt_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>> pid_terms_rt_pub_;
   rclcpp::TimerBase::SharedPtr debug_timer_;
 
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> feedforward_buffer_;
