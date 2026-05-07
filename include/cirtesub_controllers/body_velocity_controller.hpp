@@ -123,6 +123,7 @@ private:
   std::string setpoint_topic_;
   std::string navigator_topic_;
   std::string feedforward_topic_;
+  std::string debug_topic_;
   std::string body_force_controller_name_;
   std::vector<std::string> reference_interface_names_;
   bool debug_enabled_{false};

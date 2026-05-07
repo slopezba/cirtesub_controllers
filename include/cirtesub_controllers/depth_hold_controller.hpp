@@ -128,6 +128,7 @@ private:
   std::string feedforward_topic_;
   std::string navigator_topic_;
   std::string setpoint_topic_;
+  std::string debug_topic_;
   std::string enable_roll_pitch_service_name_;
   std::string disable_roll_pitch_service_name_;
   std::string body_force_controller_name_;

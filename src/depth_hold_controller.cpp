@@ -105,6 +105,7 @@ controller_interface::CallbackReturn DepthHoldController::on_init()
     auto_declare<double>("command_threshold", 1e-3);
     auto_declare<double>("depth_command_threshold", 1e-3);
     auto_declare<bool>("debug.enabled", false);
+    auto_declare<std::string>("debug.topic", "debug");
   } catch (const std::exception &) {
     return controller_interface::CallbackReturn::ERROR;
   }
@@ -151,6 +152,7 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
   body_force_controller_name_ =
     get_node()->get_parameter("body_force_controller_name").as_string();
   debug_enabled_ = get_node()->get_parameter("debug.enabled").as_bool();
+  debug_topic_ = get_node()->get_parameter("debug.topic").as_string();
   allow_roll_pitch_ = get_node()->get_parameter("allow_roll_pitch").as_bool();
   feedforward_gain_x_ = get_node()->get_parameter("feedforward_gain_x").as_double();
   feedforward_gain_y_ = get_node()->get_parameter("feedforward_gain_y").as_double();
@@ -244,7 +246,7 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
 
   if (debug_enabled_) {
     debug_pub_ =
-      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>("/cirtesub/controller/debug", 10);
+      get_node()->create_publisher<sura_msgs::msg::ControllerDebug>(debug_topic_, 10);
     debug_timer_ = get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()

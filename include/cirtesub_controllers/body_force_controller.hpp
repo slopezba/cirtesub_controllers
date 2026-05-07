@@ -95,6 +95,7 @@ private:
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> rt_buffer_ptr_;
 
   std::string input_topic_;
+  std::string debug_topic_;
   std::string base_link_;
   std::vector<std::string> thruster_joints_;
   bool debug_enabled_{false};

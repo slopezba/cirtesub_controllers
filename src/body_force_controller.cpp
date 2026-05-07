@@ -262,6 +262,7 @@ controller_interface::CallbackReturn BodyForceController::on_init()
     auto_declare<std::string>("input_topic", "/cirtesub/controller/body_force/command");
     auto_declare<std::string>("base_link", "base_link");
     auto_declare<bool>("debug.enabled", false);
+    auto_declare<std::string>("debug.topic", "debug");
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Exception in on_init: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -312,6 +313,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   input_topic_ = get_node()->get_parameter("input_topic").as_string();
   base_link_ = get_node()->get_parameter("base_link").as_string();
   debug_enabled_ = get_node()->get_parameter("debug.enabled").as_bool();
+  debug_topic_ = get_node()->get_parameter("debug.topic").as_string();
 
   const std::string robot_description =
     get_node()->get_parameter("robot_description").as_string();
@@ -361,7 +363,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   resetDebugStats();
 
   if (debug_enabled_) {
-    debug_pub_ = this->get_node()->create_publisher<DebugMsg>("/cirtesub/controller/debug", 10);
+    debug_pub_ = this->get_node()->create_publisher<DebugMsg>(debug_topic_, 10);
     debug_timer_ = this->get_node()->create_wall_timer(
       std::chrono::seconds(1),
       [this]()
@@ -371,7 +373,8 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
 
     RCLCPP_INFO(
       get_node()->get_logger(),
-      "Debug profiling enabled. Publishing ControllerDebug messages to '/cirtesub/controller/debug'.");
+      "Debug profiling enabled. Publishing ControllerDebug messages to '%s'.",
+      debug_topic_.c_str());
   }
 
   reference_interface_names_ = {
