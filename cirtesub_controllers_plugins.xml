@@ -33,4 +33,18 @@
     base_class_type="controller_interface::ChainableControllerInterface">
     <description>Position hold controller chained into the body velocity controller</description>
   </class>
+
+  <class
+    name="cirtesub_controllers/StateObserverController"
+    type="cirtesub_controllers::StateObserverController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>AUV state observer and diagonal model identifier in NED</description>
+  </class>
+
+  <class
+    name="cirtesub_controllers/Mpc4dofController"
+    type="cirtesub_controllers::Mpc4dofController"
+    base_class_type="controller_interface::ControllerInterface">
+    <description>4DOF chained MPC controller for x, y, z, and yaw wrench references</description>
+  </class>
 </library>

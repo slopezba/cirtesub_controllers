@@ -89,12 +89,15 @@ private:
 
   rclcpp::Subscription<WrenchMsg>::SharedPtr body_force_sub_;
   rclcpp::Publisher<Float64MultiArrayMsg>::SharedPtr output_pub_;
+  rclcpp::Publisher<WrenchMsg>::SharedPtr wrench_output_pub_;
   rclcpp::Publisher<DebugMsg>::SharedPtr debug_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>> output_rt_pub_;
+  std::shared_ptr<realtime_tools::RealtimePublisher<WrenchMsg>> wrench_output_rt_pub_;
   rclcpp::TimerBase::SharedPtr debug_timer_;
   realtime_tools::RealtimeBuffer<std::shared_ptr<WrenchMsg>> rt_buffer_ptr_;
 
   std::string input_topic_;
+  std::string wrench_output_topic_;
   std::string debug_topic_;
   std::string base_link_;
   std::vector<std::string> thruster_joints_;

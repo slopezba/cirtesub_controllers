@@ -260,6 +260,7 @@ controller_interface::CallbackReturn BodyForceController::on_init()
 {
   try {
     auto_declare<std::string>("input_topic", "/cirtesub/controller/body_force/command");
+    auto_declare<std::string>("wrench_output_topic", "/cirtesub/controller/body_force/wrench");
     auto_declare<std::string>("base_link", "base_link");
     auto_declare<bool>("debug.enabled", false);
     auto_declare<std::string>("debug.topic", "debug");
@@ -311,6 +312,7 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   const rclcpp_lifecycle::State &)
 {
   input_topic_ = get_node()->get_parameter("input_topic").as_string();
+  wrench_output_topic_ = get_node()->get_parameter("wrench_output_topic").as_string();
   base_link_ = get_node()->get_parameter("base_link").as_string();
   debug_enabled_ = get_node()->get_parameter("debug.enabled").as_bool();
   debug_topic_ = get_node()->get_parameter("debug.topic").as_string();
@@ -358,6 +360,13 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
   output_rt_pub_ =
     std::make_shared<realtime_tools::RealtimePublisher<Float64MultiArrayMsg>>(output_pub_);
   output_rt_pub_->msg_.data.resize(thruster_joints_.size(), 0.0);
+
+  wrench_output_pub_ = this->get_node()->create_publisher<WrenchMsg>(
+    wrench_output_topic_,
+    rclcpp::SystemDefaultsQoS());
+  wrench_output_rt_pub_ =
+    std::make_shared<realtime_tools::RealtimePublisher<WrenchMsg>>(wrench_output_pub_);
+
   debug_pub_.reset();
   debug_timer_.reset();
   resetDebugStats();
@@ -394,6 +403,8 @@ controller_interface::CallbackReturn BodyForceController::on_configure(
 
   RCLCPP_INFO(get_node()->get_logger(), "Configured BodyForceController");
   RCLCPP_INFO(get_node()->get_logger(), "Input topic: %s", input_topic_.c_str());
+  RCLCPP_INFO(
+    get_node()->get_logger(), "Wrench output topic: %s", wrench_output_topic_.c_str());
   RCLCPP_INFO(get_node()->get_logger(), "Base link: %s", base_link_.c_str());
   RCLCPP_INFO(get_node()->get_logger(), "Thruster joints discovered: %zu", thruster_joints_.size());
   RCLCPP_INFO(get_node()->get_logger(), "Precomputed thruster allocation pseudoinverse");
@@ -515,6 +526,16 @@ controller_interface::return_type BodyForceController::update_and_write_commands
       data[static_cast<size_t>(i)] = thruster_forces_(i);
     }
     output_rt_pub_->unlockAndPublish();
+  }
+
+  if (wrench_output_rt_pub_ && wrench_output_rt_pub_->trylock()) {
+    wrench_output_rt_pub_->msg_.force.x = desired_wrench(0);
+    wrench_output_rt_pub_->msg_.force.y = desired_wrench(1);
+    wrench_output_rt_pub_->msg_.force.z = desired_wrench(2);
+    wrench_output_rt_pub_->msg_.torque.x = desired_wrench(3);
+    wrench_output_rt_pub_->msg_.torque.y = desired_wrench(4);
+    wrench_output_rt_pub_->msg_.torque.z = desired_wrench(5);
+    wrench_output_rt_pub_->unlockAndPublish();
   }
 
   if (debug_enabled_) {

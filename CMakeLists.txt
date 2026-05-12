@@ -15,17 +15,25 @@ find_package(realtime_tools REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(urdf REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(osqp_vendor REQUIRED)
+find_package(osqp REQUIRED)
 find_package(sura_msgs REQUIRED)
 find_package(TinyXML2 REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/body_force_controller.cpp
   src/body_velocity_controller.cpp
   src/depth_hold_controller.cpp
+  src/mpc_4dof_controller.cpp
   src/position_hold_controller.cpp
+  src/state_observer_controller.cpp
+  src/state_observer_model.cpp
   src/stabilize_controller.cpp
 )
 
@@ -36,7 +44,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 target_link_libraries(${PROJECT_NAME}
   Eigen3::Eigen
+  osqp::osqp
   tinyxml2::tinyxml2
+  yaml-cpp
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -49,8 +59,10 @@ ament_target_dependencies(${PROJECT_NAME}
   std_msgs
   std_srvs
   geometry_msgs
-  urdf
+  nav_msgs
+  sensor_msgs
   sura_msgs
+  urdf
   tf2
 )
 
@@ -88,8 +100,28 @@ ament_export_dependencies(
   std_msgs
   std_srvs
   geometry_msgs
+  nav_msgs
+  sensor_msgs
+  osqp_vendor
+  sura_msgs
   urdf
   tf2
+  yaml-cpp
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_state_observer_model
+    test/test_state_observer_model.cpp
+    src/state_observer_model.cpp
+  )
+  target_include_directories(test_state_observer_model PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_state_observer_model
+    Eigen3::Eigen
+  )
+endif()
 
 ament_package()
