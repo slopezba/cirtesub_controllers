@@ -447,6 +447,31 @@ PositionHoldController::PidTerms PositionHoldController::computePidTerms(
     kd * derivative};
 }
 
+PositionHoldController::PidTerms PositionHoldController::computePidTermsWithMeasuredRate(
+  double error,
+  double measured_rate,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  const double safe_dt = dt > 0.0 ? dt : 1e-6;
+  state.integral += error * safe_dt;
+
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * -measured_rate};
+}
+
 double PositionHoldController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
@@ -694,6 +719,7 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
   yaw_error = wrapAngle(yaw_error);
 
   const double dt = period.seconds();
+  const auto & angular_velocity = (*navigator_msg)->body_velocity.angular;
 
   std::array<PidTerms, 6> pid_terms;
   pid_terms[0] = computePidTerms(
@@ -702,12 +728,13 @@ controller_interface::return_type PositionHoldController::update_and_write_comma
     position_error_body.y(), dt, kp_y_, ki_y_, kd_y_, antiwindup_y_, y_pid_);
   pid_terms[2] = computePidTerms(
     position_error_body.z(), dt, kp_z_, ki_z_, kd_z_, antiwindup_z_, z_pid_);
-  pid_terms[3] = computePidTerms(
-    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
-  pid_terms[4] = computePidTerms(
-    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
-  pid_terms[5] = computePidTerms(
-    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+  pid_terms[3] = computePidTermsWithMeasuredRate(
+    roll_error, angular_velocity.x, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[4] = computePidTermsWithMeasuredRate(
+    pitch_error, angular_velocity.y, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_,
+    pitch_pid_);
+  pid_terms[5] = computePidTermsWithMeasuredRate(
+    yaw_error, angular_velocity.z, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
 
   const double linear_x_command =
     effective_feedforward.linear.x +

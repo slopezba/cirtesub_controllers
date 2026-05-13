@@ -93,6 +93,16 @@ private:
     double antiwindup,
     AxisPidState & state);
 
+  PidTerms computePidTermsWithMeasuredRate(
+    double error,
+    double measured_rate,
+    double dt,
+    double kp,
+    double ki,
+    double kd,
+    double antiwindup,
+    AxisPidState & state);
+
   static double wrapAngle(double angle);
   void publishSetpoint();
   void publishTelemetry(

@@ -510,6 +510,29 @@ StabilizeController::PidTerms StabilizeController::computePidTerms(
     kd * derivative};
 }
 
+StabilizeController::PidTerms StabilizeController::computePidTermsWithMeasuredRate(
+  double error,
+  double measured_rate,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * -measured_rate};
+}
+
 double StabilizeController::wrapAngle(double angle)
 {
   return std::atan2(std::sin(angle), std::cos(angle));
@@ -723,14 +746,16 @@ controller_interface::return_type StabilizeController::update_and_write_commands
   const double roll_error = wrapAngle(roll_setpoint_ - roll);
   const double pitch_error = wrapAngle(pitch_setpoint_ - pitch);
   const double yaw_error = wrapAngle(yaw_setpoint_ - yaw);
+  const auto & angular_velocity = (*navigator_msg)->body_velocity.angular;
 
   std::array<PidTerms, 3> pid_terms;
-  pid_terms[0] = computePidTerms(
-    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
-  pid_terms[1] = computePidTerms(
-    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
-  pid_terms[2] = computePidTerms(
-    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+  pid_terms[0] = computePidTermsWithMeasuredRate(
+    roll_error, angular_velocity.x, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[1] = computePidTermsWithMeasuredRate(
+    pitch_error, angular_velocity.y, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_,
+    pitch_pid_);
+  pid_terms[2] = computePidTermsWithMeasuredRate(
+    yaw_error, angular_velocity.z, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
 
   const double torque_x =
     torque_ff_x +

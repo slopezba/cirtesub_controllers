@@ -90,6 +90,16 @@ private:
     double antiwindup,
     AxisPidState & state);
 
+  PidTerms computePidTermsWithMeasuredRate(
+    double error,
+    double measured_rate,
+    double dt,
+    double kp,
+    double ki,
+    double kd,
+    double antiwindup,
+    AxisPidState & state);
+
   static double wrapAngle(double angle);
   void resetPidStates();
   void setSetpointFromNavigator(const NavigatorMsg & navigator_msg);

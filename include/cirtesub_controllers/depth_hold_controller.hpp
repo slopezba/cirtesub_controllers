@@ -92,6 +92,16 @@ private:
     double antiwindup,
     AxisPidState & state);
 
+  PidTerms computePidTermsWithMeasuredRate(
+    double error,
+    double measured_rate,
+    double dt,
+    double kp,
+    double ki,
+    double kd,
+    double antiwindup,
+    AxisPidState & state);
+
   static double wrapAngle(double angle);
   void publishSetpoint();
   void publishTelemetry(
@@ -164,6 +174,7 @@ private:
   double feedforward_gain_roll_{1.0};
   double feedforward_gain_pitch_{1.0};
   double feedforward_gain_yaw_{1.0};
+  double depth_bias_force_{0.0};
   double command_threshold_{1e-3};
   double depth_command_threshold_{1e-3};
   double roll_setpoint_{0.0};

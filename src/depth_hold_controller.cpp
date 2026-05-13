@@ -82,6 +82,7 @@ controller_interface::CallbackReturn DepthHoldController::on_init()
     auto_declare<double>("feedforward_gain_roll", 1.0);
     auto_declare<double>("feedforward_gain_pitch", 1.0);
     auto_declare<double>("feedforward_gain_yaw", 1.0);
+    auto_declare<double>("depth_bias_force", 0.0);
     auto_declare<double>("kp_roll", 0.0);
     auto_declare<double>("ki_roll", 0.0);
     auto_declare<double>("kd_roll", 0.0);
@@ -160,6 +161,7 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
   feedforward_gain_roll_ = get_node()->get_parameter("feedforward_gain_roll").as_double();
   feedforward_gain_pitch_ = get_node()->get_parameter("feedforward_gain_pitch").as_double();
   feedforward_gain_yaw_ = get_node()->get_parameter("feedforward_gain_yaw").as_double();
+  depth_bias_force_ = get_node()->get_parameter("depth_bias_force").as_double();
 
   kp_roll_ = get_node()->get_parameter("kp_roll").as_double();
   ki_roll_ = get_node()->get_parameter("ki_roll").as_double();
@@ -269,13 +271,14 @@ controller_interface::CallbackReturn DepthHoldController::on_configure(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Depth hold feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
+    "Depth hold feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f depth_bias=%.3f",
     feedforward_gain_x_,
     feedforward_gain_y_,
     feedforward_gain_z_,
     feedforward_gain_roll_,
     feedforward_gain_pitch_,
-    feedforward_gain_yaw_);
+    feedforward_gain_yaw_,
+    depth_bias_force_);
   RCLCPP_INFO(
     get_node()->get_logger(),
     "Depth hold PID gains loaded: roll(kp=%.3f ki=%.3f kd=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f) depth(kp=%.3f ki=%.3f kd=%.3f)",
@@ -333,13 +336,14 @@ controller_interface::CallbackReturn DepthHoldController::on_activate(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Depth hold feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
+    "Depth hold feedforward gains loaded: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f depth_bias=%.3f",
     feedforward_gain_x_,
     feedforward_gain_y_,
     feedforward_gain_z_,
     feedforward_gain_roll_,
     feedforward_gain_pitch_,
-    feedforward_gain_yaw_);
+    feedforward_gain_yaw_,
+    depth_bias_force_);
   RCLCPP_INFO(
     get_node()->get_logger(),
     "Depth hold PID gains loaded: roll(kp=%.3f ki=%.3f kd=%.3f) pitch(kp=%.3f ki=%.3f kd=%.3f) yaw(kp=%.3f ki=%.3f kd=%.3f) depth(kp=%.3f ki=%.3f kd=%.3f)",
@@ -431,6 +435,9 @@ rcl_interfaces::msg::SetParametersResult DepthHoldController::parametersCallback
     } else if (name == "feedforward_gain_yaw") {
       feedforward_gain_yaw_ = param.as_double();
       feedforward_gains_updated = true;
+    } else if (name == "depth_bias_force") {
+      depth_bias_force_ = param.as_double();
+      feedforward_gains_updated = true;
     } else if (name == "ki_roll") {
       ki_roll_ = param.as_double();
       roll_pid_.integral = 0.0;
@@ -475,13 +482,14 @@ rcl_interfaces::msg::SetParametersResult DepthHoldController::parametersCallback
   if (feedforward_gains_updated) {
     RCLCPP_INFO(
       get_node()->get_logger(),
-      "Depth hold feedforward gains updated: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f",
+      "Depth hold feedforward gains updated: x=%.3f y=%.3f z=%.3f roll=%.3f pitch=%.3f yaw=%.3f depth_bias=%.3f",
       feedforward_gain_x_,
       feedforward_gain_y_,
       feedforward_gain_z_,
       feedforward_gain_roll_,
       feedforward_gain_pitch_,
-      feedforward_gain_yaw_);
+      feedforward_gain_yaw_,
+      depth_bias_force_);
   }
 
   return result;
@@ -536,6 +544,29 @@ DepthHoldController::PidTerms DepthHoldController::computePidTerms(
     kp * error,
     ki * state.integral,
     kd * derivative};
+}
+
+DepthHoldController::PidTerms DepthHoldController::computePidTermsWithMeasuredRate(
+  double error,
+  double measured_rate,
+  double dt,
+  double kp,
+  double ki,
+  double kd,
+  double antiwindup,
+  AxisPidState & state)
+{
+  state.integral += error * dt;
+  if (antiwindup > 0.0) {
+    state.integral = std::clamp(state.integral, -antiwindup, antiwindup);
+  }
+
+  state.previous_error = error;
+
+  return {
+    kp * error,
+    ki * state.integral,
+    kd * -measured_rate};
 }
 
 double DepthHoldController::wrapAngle(double angle)
@@ -768,19 +799,22 @@ controller_interface::return_type DepthHoldController::update_and_write_commands
   const double pitch_error = wrapAngle(pitch_setpoint_ - pitch);
   const double yaw_error = wrapAngle(yaw_setpoint_ - yaw);
   const double depth_error = depth_setpoint_ - depth;
+  const auto & angular_velocity = (*navigator_msg)->body_velocity.angular;
 
   std::array<PidTerms, 4> pid_terms;
-  pid_terms[0] = computePidTerms(
-    roll_error, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
-  pid_terms[1] = computePidTerms(
-    pitch_error, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_, pitch_pid_);
-  pid_terms[2] = computePidTerms(
-    yaw_error, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
+  pid_terms[0] = computePidTermsWithMeasuredRate(
+    roll_error, angular_velocity.x, dt, kp_roll_, ki_roll_, kd_roll_, antiwindup_roll_, roll_pid_);
+  pid_terms[1] = computePidTermsWithMeasuredRate(
+    pitch_error, angular_velocity.y, dt, kp_pitch_, ki_pitch_, kd_pitch_, antiwindup_pitch_,
+    pitch_pid_);
+  pid_terms[2] = computePidTermsWithMeasuredRate(
+    yaw_error, angular_velocity.z, dt, kp_yaw_, ki_yaw_, kd_yaw_, antiwindup_yaw_, yaw_pid_);
   pid_terms[3] = computePidTerms(
     depth_error, dt, kp_depth_, ki_depth_, kd_depth_, antiwindup_depth_, depth_pid_);
 
   const double force_z =
     force_ff_z +
+    depth_bias_force_ +
     pid_terms[3].proportional + pid_terms[3].integral + pid_terms[3].derivative;
 
   const double torque_x =
